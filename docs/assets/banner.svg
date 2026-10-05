@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="370" viewBox="0 0 1200 370" role="img" aria-labelledby="title desc">
+  <title id="title">HKA — 崩坏学园2每日任务助手</title>
+  <desc id="desc">一键日常、动态首通、奖励领取与资源核对。深蓝背景，青色与粉色强调的项目横幅。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#0b1227"/><stop offset="1" stop-color="#172448"/></linearGradient>
+    <linearGradient id="accent"><stop stop-color="#74f4df"/><stop offset="1" stop-color="#4eb8ff"/></linearGradient>
+    <radialGradient id="glow"><stop stop-color="#56d9e6" stop-opacity=".2"/><stop offset="1" stop-color="#56d9e6" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="370" rx="24" fill="url(#bg)"/>
+  <circle cx="1010" cy="125" r="280" fill="url(#glow)"/>
+  <path d="M785 0v370M855 0v370M925 0v370M995 0v370M1065 0v370M1135 0v370M740 55h460M740 125h460M740 195h460M740 265h460M740 335h460" stroke="#69dbdf" stroke-opacity=".065"/>
+  <rect x="58" y="44" width="178" height="28" rx="14" fill="#243951"/>
+  <circle cx="77" cy="58" r="4" fill="#74f4df"/>
+  <text x="89" y="63" fill="#baf7f0" font-family="Arial,sans-serif" font-size="12" font-weight="700" letter-spacing="1.5">DAILY TASK HELPER</text>
+  <text x="56" y="167" fill="#ffffff" font-family="Arial,sans-serif" font-size="104" font-weight="800" letter-spacing="-4">HKA</text>
+  <rect x="62" y="184" width="72" height="5" rx="2" fill="url(#accent)"/>
+  <text x="60" y="236" fill="#ffffff" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="32" font-weight="700">崩坏学园2 每日任务助手</text>
+  <text x="60" y="279" fill="#b7c7e2" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="20">点一次运行，交给流程完成。</text>
+  <text x="60" y="329" fill="#79e4d5" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="15">一键日常 · 动态首通 · 奖励领取 · 资源核对</text>
+  <g transform="translate(810 62)">
+    <rect x="12" y="8" width="309" height="243" rx="19" fill="#071020" opacity=".28"/>
+    <rect width="309" height="243" rx="19" fill="#14243d" stroke="#476887"/>
+    <circle cx="25" cy="25" r="4" fill="#ff83b6"/><circle cx="40" cy="25" r="4" fill="#ffc371"/><circle cx="55" cy="25" r="4" fill="#74f4df"/>
+    <text x="25" y="66" fill="#ffffff" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="21" font-weight="700">今日任务</text>
+    <rect x="224" y="47" width="61" height="23" rx="11" fill="#74f4df"/><text x="237" y="63" fill="#10233c" font-family="Arial,sans-serif" font-size="11" font-weight="700">READY</text>
+    <g fill="none" stroke="#74f4df" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m27 105 5 5 10-12"/><path d="m27 142 5 5 10-12"/><path d="m27 179 5 5 10-12"/></g>
+    <g fill="#d9e5f7" font-family="Microsoft YaHei,Noto Sans CJK SC,sans-serif" font-size="15"><text x="56" y="108">免费次数，逐次核对</text><text x="56" y="145">新关卡，自动补推</text><text x="56" y="182">领奖与 BONUS，依序执行</text></g>
+    <rect x="25" y="204" width="260" height="14" rx="7" fill="#263a56"/><rect x="25" y="204" width="204" height="14" rx="7" fill="url(#accent)"/>
+  </g>
+  <rect x="1040" y="294" width="98" height="26" rx="13" fill="#ff83b6"/><text x="1056" y="312" fill="#271a39" font-family="Arial,sans-serif" font-size="12" font-weight="700">ONE CLICK</text>
+</svg>
