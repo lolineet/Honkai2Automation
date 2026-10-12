@@ -71,29 +71,44 @@ def integer_after(hits: list[TextHit], label: str) -> int | None:
     return None
 
 
+def read_stamina_hud(png: bytes) -> list[TextHit]:
+    """Enlarge the small HUD with padding, preserving 1600×900 coordinates."""
+    left, top, right, bottom = 280, 72, 500, 140
+    scale = 3
+    with Image.open(io.BytesIO(png)) as image:
+        crop = image.convert("RGB").crop((left, top, right, bottom))
+        crop = crop.resize((crop.width * scale, crop.height * scale), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        crop.save(output, format="PNG")
+    return [TextHit(hit.text, hit.score, left + hit.x // scale, top + hit.y // scale,
+                    hit.width // scale, hit.height // scale)
+            for hit in read_text(output.getvalue(), min_score=0.85)]
+
+
+def _stamina_value(hits: list[TextHit], *, doubled: bool) -> int | None:
+    hud = [hit for hit in hits if 280 <= hit.x < 500 and 72 <= hit.y < 140]
+    # Sometimes OCR splits the pink label into "双倍" and "体力".
+    # A frame with any double label must never be ordinary stamina.
+    is_double = any("双倍" in hit.text for hit in hud)
+    if is_double != doubled or not any("体力" in hit.text for hit in hud):
+        return None
+    values = []
+    labels = [hit for hit in hud if "体力" in hit.text]
+    for hit in hud:
+        text = re.sub(r"\s+", "", hit.text)
+        match = re.fullmatch(r"(?:(?:双倍)?体力[:：]?)?(\d{1,4})/(\d{1,4})", text)
+        if match and int(match.group(2)) > 0 and any(
+                abs(label.y - hit.y) <= 20 and 0 <= hit.x - label.x < 160 for label in labels):
+            values.append(int(match.group(1)))
+    return values[0] if len(values) == 1 else None
+
+
 def stamina(hits: list[TextHit]) -> int | None:
-    # The HUD alternates between regular stamina and "双倍体力". The latter
-    # has the same number format but is a different resource.
-    labels = [hit for hit in hits if "体力" in hit.text and "双倍" not in hit.text]
-    for hit in hits:
-        match = re.search(r"(?:体力)?\s*(\d{1,4})\s*/\s*\d{1,4}", hit.text)
-        if match and hit.x < 550 and hit.y < 150 and "双倍" not in hit.text and (
-            "体力" in hit.text or any(label.y - 12 <= hit.y <= label.y + 20
-                                  and 0 <= hit.x - label.x < 160 for label in labels)
-        ):
-            return int(match.group(1))
-    return None
+    return _stamina_value(hits, doubled=False)
 
 
 def double_stamina(hits: list[TextHit]) -> int | None:
-    labels = [hit for hit in hits if "双倍体力" in hit.text and hit.x < 550 and hit.y < 150]
-    for hit in hits:
-        match = re.search(r"(\d{1,4})\s*/\s*\d{1,4}", hit.text)
-        if match and hit.x < 550 and hit.y < 150 and any(
-                label.y - 12 <= hit.y <= label.y + 20 and
-                0 <= hit.x - label.x < 160 for label in labels):
-            return int(match.group(1))
-    return None
+    return _stamina_value(hits, doubled=True)
 
 
 def stage_labels(png: bytes) -> list[TextHit]:

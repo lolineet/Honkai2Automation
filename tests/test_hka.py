@@ -67,7 +67,7 @@ class FakeDevice:
 
 class ManualStartTests(unittest.TestCase):
     def test_opening_web_page_does_not_run_tasks_even_with_old_timer_config(self):
-        with patch('hka.web.ThreadingHTTPServer') as server, \
+        with patch('hka.web.LocalServer') as server, \
              patch('hka.web.TaskRunner') as runner, \
              patch('hka.web.threading.Thread') as thread, \
              patch('hka.web.load_config', return_value={'runtime': {'scheduler_enabled': True}}), \

@@ -12,7 +12,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
 
-from .ocr import TextHit, double_stamina, find_text, integer_after, read_text, stage_labels, stamina
+from .ocr import TextHit, double_stamina, find_text, integer_after, read_stamina_hud, read_text, stage_labels, stamina
 from .runner import SkipTask
 from .vision import find_image
 
@@ -432,20 +432,27 @@ class GameFlows:
         return bool(find_text(detail, name) and find_text(detail, "最高得分"))
 
     def _stamina(self) -> int:
-        for _ in range(20):
-            value = stamina(self._hits((285, 75, 475, 135), score=0.6))
-            if value is not None:
-                return value
-            self.sleep(0.8)
-        raise RuntimeError("无法识别当前体力（顶部可能正在显示双倍体力）")
+        return self._confirmed_stamina(doubled=False)
 
     def _double_stamina(self) -> int:
+        return self._confirmed_stamina(doubled=True)
+
+    def _confirmed_stamina(self, *, doubled: bool) -> int:
+        previous = None
+        parse = double_stamina if doubled else stamina
+        label = "双倍体力" if doubled else "普通体力"
         for _ in range(20):
-            value = double_stamina(self._hits((285, 75, 475, 135), score=0.6))
-            if value is not None:
+            hits = read_stamina_hud(self._screen())
+            value = parse(hits)
+            # A crossfade can briefly leave only "70" of "270" readable.
+            # Missing labels or the other resource interrupt confirmation.
+            if value is not None and value == previous:
+                raw = " / ".join(h.text for h in hits)
+                self.log(f"{label}复核：{value}（连续两帧一致；OCR：{raw}）")
                 return value
-            self.sleep(0.8)
-        raise RuntimeError("无法识别顶部双倍体力，未增加 BONUS 次数")
+            previous = value
+            self.sleep(0.4)
+        raise RuntimeError(f"无法连续确认{label}，未使用本次识别结果（顶部可能正在切换显示）")
 
     def _exchange_snapshot(self) -> tuple[list[TextHit], bool]:
         frame = self._screen()
@@ -600,8 +607,11 @@ class GameFlows:
                     raise RuntimeError("双倍券开关状态无法确认，未进入战斗")
             if double_extra and self._stamina() < 50:
                 self._exchange_double_stamina()
-            if self._stamina() < (50 if double_extra else int(options.get("min_stamina", 100))):
+            confirmed_stamina = self._stamina()
+            if confirmed_stamina < (50 if double_extra else int(options.get("min_stamina", 100))):
                 raise SkipTask("普通体力仍不足，本局 BONUS 未进入战斗")
+            self.log(f"BONUS 开战核对：普通体力 {confirmed_stamina}，"
+                     f"双倍券{'开启' if use_ticket else '关闭'}，详情页消耗 {expected_cost}")
         self._click("选择助战好友", (725, 745, 1090, 865))
         self._tap(530, 325)
         self._click("开战", (820, 765, 1240, 885))

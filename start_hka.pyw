@@ -4,13 +4,18 @@ import os
 import site
 import sys
 import webbrowser
+import shutil
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
 site.addsitedir(str(ROOT / ".venv" / "Lib" / "site-packages"))
 os.chdir(ROOT)
 (ROOT / "runs").mkdir(exist_ok=True)
-sys.stdout = sys.stderr = (ROOT / "runs" / "assistant-service.log").open(
-    "a", encoding="utf-8", buffering=1)
+if not (ROOT / "config.json").exists():
+    shutil.copyfile(ROOT / "config.example.json", ROOT / "config.json")
+if "--console" not in sys.argv:
+    sys.stdout = sys.stderr = (ROOT / "runs" / "assistant-service.log").open(
+        "a", encoding="utf-8", buffering=1)
 
 import msvcrt
 lock = (ROOT / "assistant.lock").open("a+b")
@@ -32,4 +37,7 @@ if silent:
 else:
     os.environ.pop("HKA_NO_BROWSER", None)
 from hka.web import serve
-serve(ROOT / "config.json", 8765)
+try:
+    serve(ROOT / "config.json", 8765)
+except KeyboardInterrupt:
+    pass

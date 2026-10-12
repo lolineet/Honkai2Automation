@@ -18,3 +18,4 @@ capture.png
 .pytest_cache/
 build/
 dist/
+platform-tools/

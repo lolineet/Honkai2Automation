@@ -1,8 +1,8 @@
 {
   "version": 1,
   "emulator": {
-    "adb_path": "adb",
-    "serial": "127.0.0.1:5555",
+    "adb_path": "builtin",
+    "serial": "auto",
     "executable": "",
     "arguments": [],
     "launch_delay": 10,

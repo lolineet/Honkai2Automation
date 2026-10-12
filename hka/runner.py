@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .adb import AdbDevice
+from .cancellation import Cancelled
 from .config import execution_day, schedule_matches
 from .notify import send_notifications
 from .vision import find_image
@@ -21,10 +22,6 @@ class BreakRepeat(Exception):
     pass
 
 
-class Cancelled(Exception):
-    pass
-
-
 class TaskRunner:
     def __init__(self, config: dict[str, Any], config_path: Path, *, device: AdbDevice | None = None,
                  log: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep,
@@ -34,14 +31,28 @@ class TaskRunner:
         self.base = self.config_path.parent
         self.device = device or AdbDevice(config["emulator"])
         self.log = log
-        self.sleep = sleep
         self.cancel = cancel or threading.Event()
+        self._sleep = sleep
+        if isinstance(self.device, AdbDevice):
+            self.device.cancel = self.cancel
         self.template_dir = (self.base / config.get("runtime", {}).get("template_dir", "templates")).resolve()
         self.run_dir = (self.base / config.get("runtime", {}).get("run_dir", "runs")).resolve()
         self.state_path = self.base / "state.json"
         self.today = execution_day(config.get("runtime", {}), datetime.now())
         self._screen_size: tuple[int, int] | None = None
         self._task_details: dict[str, Any] = {}
+
+    def _check_cancel(self) -> None:
+        if self.cancel.is_set():
+            raise Cancelled()
+
+    def sleep(self, seconds: float) -> None:
+        self._check_cancel()
+        if self._sleep is time.sleep:
+            self.cancel.wait(max(0, seconds))
+        else:
+            self._sleep(seconds)
+        self._check_cancel()
 
     def plan(self, *, task_ids: set[str] | None = None, force: bool = False) -> list[dict[str, Any]]:
         pending = {item["id"] for item in self.preview(task_ids=task_ids, force=force)
@@ -96,7 +107,10 @@ class TaskRunner:
         started = False
         try:
             try:
+                self._check_cancel()
                 self.device.connect()
+            except Cancelled:
+                raise
             except Exception:
                 if not self.device.emulator_path:
                     raise
@@ -116,6 +130,7 @@ class TaskRunner:
                 self._task_details = {}
                 try:
                     self._steps(task["steps"])
+                    self._check_cancel()
                     status, message = "success", "完成"
                     self._mark_done(task["id"])
                 except Cancelled:
@@ -158,6 +173,8 @@ class TaskRunner:
                     break
                 if status == "failed" and index + 1 < len(tasks):
                     self.log("当前任务失败，继续后续任务")
+        except Cancelled:
+            result["cancelled"] = True
         except Exception as exc:
             result["setup_error"] = str(exc)
             self.log(f"连接或启动失败: {exc}")
@@ -167,11 +184,14 @@ class TaskRunner:
         result["finished_at"] = datetime.now().isoformat(timespec="seconds")
         failed = bool(result.get("setup_error")) or any(item["status"] == "failed" for item in result["tasks"])
         result["status"] = "cancelled" if result.get("cancelled") else ("failed" if failed else "success")
+        if result.get("cancelled"):
+            self.log("任务已停止")
         lines = [f"运行时间: {result['started_at']}", f"结果: {result['status']}"]
         if result.get("setup_error"):
             lines.append(f"连接错误: {result['setup_error']}")
         lines += [f"{item['name']}: {item['status']} {item['message']}" for item in result["tasks"]]
-        result["notification_errors"] = send_notifications(self.config, success=not failed and not result.get("cancelled"), title="崩坏2任务执行" + ("已停止" if result.get("cancelled") else ("失败" if failed else "完成")), body="\n".join(lines))
+        if not result.get("cancelled"):
+            result["notification_errors"] = send_notifications(self.config, success=not failed, title="崩坏2任务执行" + ("失败" if failed else "完成"), body="\n".join(lines))
         for error in result["notification_errors"]:
             self.log(f"通知发送失败: {error}")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

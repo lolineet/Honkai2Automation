@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import socket
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,15 @@ from .adb import AdbDevice
 from .config import ConfigError, load_config, save_config, validate_config
 from .runner import TaskRunner
 from .vision import crop_template, template_path
+
+
+class LocalServer(ThreadingHTTPServer):
+    def server_bind(self):
+        if os.name == "nt":
+            # Windows SO_REUSEADDR allows unrelated instances to share requests.
+            self.allow_reuse_address = False
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 def config_revision(path: Path) -> str:
@@ -151,6 +161,7 @@ def serve(config_path: Path, port: int = 8765) -> None:
                     return self._json({"ok": True})
                 if route == "/api/stop":
                     state.cancel.set()
+                    state.log("收到停止请求，正在中断当前任务")
                     return self._json({"ok": True})
                 if route == "/api/tap":
                     with state.lock:
@@ -181,7 +192,7 @@ def serve(config_path: Path, port: int = 8765) -> None:
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = LocalServer(("127.0.0.1", port), Handler)
     address = f"http://127.0.0.1:{port}/"
     print(f"配置界面: {address}")
     if os.getenv("HKA_NO_BROWSER") != "1":
