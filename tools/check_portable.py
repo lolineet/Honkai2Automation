@@ -16,6 +16,7 @@ def main():
         relocated = Path(temporary) / "中文目录 with spaces"
         with zipfile.ZipFile(ROOT / "dist" / "HKA-Windows-x64.zip") as archive:
             names = archive.namelist()
+            assert not any(Path(name).suffix.lower() == '.vbs' for name in names)
             assert not any(Path(name).name in {"config.json", "state.json", "assistant.lock"}
                            for name in names)
             archive.extractall(relocated)

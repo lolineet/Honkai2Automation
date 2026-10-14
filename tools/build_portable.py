@@ -71,7 +71,7 @@ def main():
                         target / "rapidocr" / "models", dirs_exist_ok=True)
         shutil.copytree(ROOT / "hka", package / "hka",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        for name in ["start_hka.pyw", "打开助手.vbs", "打开助手.bat", "config.example.json", "LICENSE", "README.md"]:
+        for name in ["start_hka.pyw", "打开助手.bat", "config.example.json", "LICENSE", "README.md"]:
             shutil.copy2(ROOT / name, package / name)
         bat = package / "打开助手.bat"
         bat.write_bytes(bat.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))

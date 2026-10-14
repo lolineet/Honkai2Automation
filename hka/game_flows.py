@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -141,10 +142,46 @@ class GameFlows:
             self.sleep(0.7)
         raise RuntimeError("未进入商店首页")
 
+    def _startup_prompt(self, hits: list[TextHit]) -> str | None:
+        words = "".join(re.sub(r"\s+", "", hit.text) for hit in hits)
+        agreement = any(token in words for token in (
+            "用户协议", "隐私政策", "隐私协议", "服务协议", "授权声明", "隐私保护提示", "权限申请"))
+        update = any(token in words for token in (
+            "资源更新", "版本更新", "游戏更新", "更新资源", "更新包", "新版本", "资源下载", "检测到新资源")) or (
+            "资源包大小" in words and "下载" in words)
+        if agreement:
+            labels = {"同意", "同意并继续", "同意并进入", "同意并接受", "接受", "允许", "同意并授权"}
+            kind = "agreement"
+        elif update:
+            labels = {"确定", "确认", "更新", "立即更新", "开始更新", "下载", "立即下载", "开始下载", "安装", "快给我下"}
+            kind = "update"
+        else:
+            return None
+        buttons = [hit for hit in hits if re.sub(r"\s+", "", hit.text) in labels]
+        if len(buttons) == 1:
+            button = buttons[0]
+            self.log("检测到协议授权，自动同意" if agreement else "检测到游戏更新，自动确认更新")
+            self._tap(button.x + button.width // 2, button.y + button.height // 2, 1)
+            return kind
+        if update and any(token in words for token in (
+                "下载中", "正在下载", "更新中", "正在更新", "解压", "下载进度")):
+            return "updating"
+        return None
+
     def enter_game(self, options: dict[str, Any]) -> None:
         entered = False
-        for _ in range(45):
+        deadline = time.monotonic() + 90
+        update_started = False
+        while time.monotonic() < deadline:
             hits = self._hits()
+            prompt = self._startup_prompt(hits)
+            if prompt is not None:
+                if prompt in {"update", "updating"} and not update_started:
+                    self.log("等待游戏更新完成，最多等待 15 分钟")
+                    deadline = time.monotonic() + 900
+                    update_started = True
+                self.sleep(1)
+                continue
             if any("首页" in hit.text and 750 <= hit.x <= 900 and hit.y < 135 for hit in hits):
                 self.log("已进入游戏")
                 return
@@ -164,7 +201,7 @@ class GameFlows:
             elif find_text(hits, "屏幕继续"):
                 self._tap(800, 835, 2)
             self.sleep(1)
-        raise RuntimeError("进入游戏超时，请检查模拟器中的登录或加载提示")
+        raise RuntimeError("游戏更新或进入游戏超时，请检查模拟器中的更新、登录或加载提示")
 
     def refresh_resonance(self, options: dict[str, Any]) -> None:
         self._shop()
