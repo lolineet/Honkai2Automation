@@ -150,7 +150,7 @@ def validate_steps(steps: Any, location: str) -> None:
             raise ConfigError(f"{where}.type 无效")
         kind = step["type"]
         if kind == "game_flow":
-            if step.get("flow") not in {"enter_game", "refresh_resonance", "free_gift", "quick_battle", "stamina_farm", "expeditions", "claim_presence", "claim_weekly", "bonus_double_stamina"}:
+            if step.get("flow") not in {"enter_game", "claim_login_rewards", "refresh_resonance", "free_gift", "quick_battle", "stamina_farm", "expeditions", "claim_presence", "claim_weekly", "bonus_double_stamina"}:
                 raise ConfigError(f"{where}.flow 无效")
             options = step.get("options", {})
             if not isinstance(options, dict):

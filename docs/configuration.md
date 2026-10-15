@@ -4,7 +4,7 @@
 
 ## 配置文件与首次使用
 
-首页快速开始使用 `config.example.json` 作为起点：OCR 日常已启用，模拟器参数和通知留给使用者填写。签到、邮件及活动模板不附带个人截图，需要裁剪后启用。
+首页快速开始使用 `config.example.json` 作为起点：OCR 日常已启用，模拟器参数和通知留给使用者填写。签到与连登奖励共用 `game_flow: claim_login_rewards`，无需模板；旧配置可将 `signin` 的步骤替换为该流程。邮件及活动模板不附带个人截图，需要裁剪后启用。
 
 `python -m hka --config config.json init` 则生成更保守的通用配置，只启用启动游戏。已有 `config.json` 时不要再次初始化。
 

@@ -20,8 +20,8 @@ DEFAULT_CONFIG = {
     "tasks": [
         {"id": "launch", "name": "启动崩坏2", "kind": "daily", "enabled": True, "schedule": {"type": "daily"},
          "steps": [{"type": "launch_game", "wait": 20}, {"type": "game_flow", "flow": "enter_game"}]},
-        {"id": "signin", "name": "每日签到领取", "kind": "daily", "enabled": False, "schedule": {"type": "daily"},
-         "steps": [{"type": "tap_image", "image": "signin_claim.png", "region": [0.58, 0.55, 0.9, 0.8], "timeout": 6, "on_missing": "skip_task", "wait": 1}]},
+        {"id": "signin", "name": "签到与连登奖励", "kind": "daily", "enabled": True, "always_run": True, "schedule": {"type": "daily"},
+         "steps": [{"type": "game_flow", "flow": "claim_login_rewards"}]},
         {"id": "dismiss_popups", "name": "关闭登录弹窗", "kind": "daily", "enabled": False, "schedule": {"type": "daily"},
          "steps": [{"type": "repeat", "times": 6, "steps": [{"type": "tap_image", "image": "popup_close.png", "region": [0.65, 0.08, 0.95, 0.5], "timeout": 2, "on_missing": "break_repeat", "wait": 0.7}]},
                    {"type": "tap_image", "image": "announcement_close.png", "region": [0.8, 0, 1, 0.25], "timeout": 3, "on_missing": "continue", "wait": 0.7}]},

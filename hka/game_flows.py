@@ -203,6 +203,70 @@ class GameFlows:
             self.sleep(1)
         raise RuntimeError("游戏更新或进入游戏超时，请检查模拟器中的更新、登录或加载提示")
 
+    @staticmethod
+    def _login_reward_page(hits: list[TextHit]) -> str | None:
+        titles = [hit.text for hit in hits if 400 <= hit.x <= 1100 and 200 <= hit.y <= 340]
+        days = [hit for hit in hits if 330 <= hit.x <= 1250 and 400 <= hit.y <= 550
+                and re.fullmatch(r"第[一二三四五六七八九十\d]+天", hit.text.strip())]
+        if len(days) < 2:
+            return None
+        for title in titles:
+            if "每日签到" in title:
+                return "每日签到"
+            if any(token in title for token in ("连登", "连续登录", "连续登陆")):
+                return title
+        return None
+
+    def claim_login_rewards(self, options: dict[str, Any]) -> dict[str, Any]:
+        claimed: list[str] = []
+        pending = None
+        idle = 0
+        waiting = 0
+        for _ in range(40):
+            self._check_cancel()
+            hits = self._hits()
+            if self._dismiss_navigation_notice(hits):
+                if pending:
+                    claimed.append(pending)
+                    self.log(f"已确认领取{pending}奖励")
+                    pending = None
+                idle = 0
+                continue
+            page = self._login_reward_page(hits)
+            if pending and page != pending:
+                claimed.append(pending)
+                self.log(f"已确认领取{pending}奖励")
+                pending = None
+                waiting = 0
+            if page is not None:
+                idle = 0
+                if pending or page in claimed:
+                    waiting += 1
+                    if waiting >= 8:
+                        raise RuntimeError(f"{page}领取后页面未消失，停止重复点击")
+                    self.sleep(0.6)
+                    continue
+                buttons = [hit for hit in hits if hit.text.strip() == "领取" and
+                           1050 <= hit.x <= 1300 and 560 <= hit.y <= 700]
+                if len(buttons) == 1:
+                    button = buttons[0]
+                    self.log(f"领取{page}奖励")
+                    self._tap(button.x + button.width // 2, button.y + button.height // 2, 1)
+                    pending = page
+                    waiting = 0
+                else:
+                    waiting += 1
+                    if waiting >= 8:
+                        raise RuntimeError(f"已识别{page}，但未确认领取按钮")
+                    self.sleep(0.6)
+                continue
+            idle += 1
+            if idle >= 3:
+                self.log(f"签到与连登奖励处理完成，共领取 {len(claimed)} 份")
+                return {"claimed": len(claimed), "pages": claimed}
+            self.sleep(0.6)
+        raise RuntimeError("签到与连登奖励处理超过检查上限")
+
     def refresh_resonance(self, options: dict[str, Any]) -> None:
         self._shop()
         self._click("崩坏屋", (1000, 175, 1450, 410))
@@ -849,6 +913,7 @@ def run_game_flow(runner: Any, step: dict[str, Any]) -> dict[str, Any] | None:
     options = step.get("options", {})
     mapping = {
         "enter_game": flows.enter_game,
+        "claim_login_rewards": flows.claim_login_rewards,
         "refresh_resonance": flows.refresh_resonance,
         "free_gift": flows.free_gift,
         "quick_battle": flows.quick_battle,

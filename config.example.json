@@ -55,25 +55,16 @@
     },
     {
       "id": "signin",
-      "name": "每日签到领取",
+      "name": "签到与连登奖励",
       "kind": "daily",
-      "enabled": false,
+      "enabled": true,
       "schedule": {
         "type": "daily"
       },
       "steps": [
         {
-          "type": "tap_image",
-          "image": "signin_claim.png",
-          "region": [
-            0.58,
-            0.55,
-            0.9,
-            0.8
-          ],
-          "timeout": 6,
-          "on_missing": "skip_task",
-          "wait": 1
+          "type": "game_flow",
+          "flow": "claim_login_rewards"
         }
       ],
       "always_run": true
