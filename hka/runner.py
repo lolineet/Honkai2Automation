@@ -11,6 +11,7 @@ from .adb import AdbDevice
 from .cancellation import Cancelled
 from .config import execution_day, schedule_matches
 from .notify import send_notifications
+from .inventory import EquipmentFull
 from .vision import find_image
 
 
@@ -138,6 +139,14 @@ class TaskRunner:
                     break
                 except SkipTask as exc:
                     status, message = "skipped", str(exc)
+                except EquipmentFull as exc:
+                    status, message = "failed", str(exc)
+                    result['attention_required'] = {'code': 'equipment_full', 'message': message}
+                    self.log('需要处理：' + message)
+                    try:
+                        result['attention_required']['screenshot'] = str(self._save_screenshot('equipment_full'))
+                    except Exception as screenshot_error:
+                        self.log(f'错误截图失败: {screenshot_error}')
                 except Exception as exc:
                     status, message = "failed", str(exc)
                     try:
@@ -164,8 +173,8 @@ class TaskRunner:
                         message = f"快捷战斗完成 {quick['battles']} 场（确认 {quick['operations']} 次）；剩余免费次数 {quick['remaining_free']}"
                         result["tasks"][-1]["message"] = message
                 self.log(f"{task['name']}: {status} {message}")
-                if status == "failed" and (task.get("required", False) or self.config.get("runtime", {}).get("stop_on_error", False)):
-                    reason = "游戏启动或登录失败，无法继续" if task.get("required", False) else "前项失败，已按配置停止"
+                if status == "failed" and (result.get('attention_required') or task.get("required", False) or self.config.get("runtime", {}).get("stop_on_error", False)):
+                    reason = result['attention_required']['message'] if result.get('attention_required') else ("游戏启动或登录失败，无法继续" if task.get("required", False) else "前项失败，已按配置停止")
                     self.log(reason)
                     result["not_run"].extend({"id": item["id"], "name": item["name"],
                         "status": "stopped_after_error", "reason": reason}
@@ -191,7 +200,8 @@ class TaskRunner:
             lines.append(f"连接错误: {result['setup_error']}")
         lines += [f"{item['name']}: {item['status']} {item['message']}" for item in result["tasks"]]
         if not result.get("cancelled"):
-            result["notification_errors"] = send_notifications(self.config, success=not failed, title="崩坏2任务执行" + ("失败" if failed else "完成"), body="\n".join(lines))
+            title = '装备仓库已满，需要处理' if result.get('attention_required') else "崩坏2任务执行" + ("失败" if failed else "完成")
+            result["notification_errors"] = send_notifications(self.config, success=not failed, title=title, body="\n".join(lines))
         for error in result["notification_errors"]:
             self.log(f"通知发送失败: {error}")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

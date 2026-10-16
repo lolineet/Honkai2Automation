@@ -22,6 +22,8 @@ class DailySchedule:
             return False
         if result.get("mode") != "daily" or result.get("status") != "failed":
             return False
+        if result.get('attention_required'):
+            return False
         try:
             finished = datetime.fromisoformat(result["finished_at"])
         except (KeyError, TypeError, ValueError):

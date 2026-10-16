@@ -15,7 +15,7 @@ DEFAULT_CONFIG = {
         "on_success": True,
         "on_error": True,
         "webhooks": [],
-        "email": {"enabled": False, "host": "", "port": 587, "username": "", "sender": "", "recipient": "", "password_env": "HKA_SMTP_PASSWORD"},
+        "email": {"enabled": False, "provider": "qq", "qq_number": "", "host": "smtp.qq.com", "port": 465, "security": "ssl", "username": "", "sender": "", "recipient": "", "password_env": "HKA_SMTP_PASSWORD"},
     },
     "tasks": [
         {"id": "launch", "name": "启动崩坏2", "kind": "daily", "enabled": True, "schedule": {"type": "daily"},

@@ -16,6 +16,7 @@ from PIL import Image, ImageChops, ImageStat
 from .ocr import TextHit, double_stamina, find_text, integer_after, read_stamina_hud, read_text, stage_labels, stamina
 from .runner import SkipTask
 from .vision import find_image
+from .inventory import check_equipment_capacity
 
 
 class GameFlows:
@@ -59,8 +60,13 @@ class GameFlows:
     def _hits(self, box: tuple[int, int, int, int] = (0, 0, 1600, 900),
               *, score: float = 0.75) -> list[TextHit]:
         self._check_cancel()
-        return read_text(self._screen(), tuple(v / (1600 if i % 2 == 0 else 900)
-                                                      for i, v in enumerate(box)), min_score=score)
+        png = self._screen()
+        full = read_text(png, min_score=score)
+        check_equipment_capacity(full)
+        if box == (0, 0, 1600, 900):
+            return full
+        return read_text(png, tuple(v / (1600 if i % 2 == 0 else 900)
+                                    for i, v in enumerate(box)), min_score=score)
 
     def _text(self, needle: str, box: tuple[int, int, int, int] = (0, 0, 1600, 900)) -> TextHit | None:
         return find_text(self._hits(box), needle)
@@ -364,14 +370,36 @@ class GameFlows:
 
     def _rift(self) -> None:
         self._battle_picker()
-        for _ in range(5):
-            hits = self._hits((925, 180, 1535, 875))
-            hit = find_text(hits, "多元裂缝")
-            if hit:
-                self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2, 1.0)
-                return
-            self._swipe(1290, 760, 1290, 320)
-        raise RuntimeError("活动列表未找到多元裂缝")
+        self._click("活动", (35, 175, 185, 490))
+        # The picker retains its scroll position. Search towards the top first,
+        # then scan down with overlapping steps so an entry cannot be skipped.
+        for start, end in ((350, 650), (740, 440)):
+            previous = None
+            for attempt in range(9):
+                hits = self._hits((925, 180, 1535, 875), score=0.65)
+                hit = find_text(hits, "多元裂缝")
+                if hit:
+                    if hit.y < 210:
+                        self._swipe(1290, 350, 1290, 650, 650, 0.8)
+                        continue
+                    self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2, 1.0)
+                    for _ in range(6):
+                        stages = self._hits((550, 150, 1535, 740), score=0.65)
+                        if all(find_text(stages, name) is not None
+                               for name in ("使魔的爱", "虚轴之庭")):
+                            return
+                        self.sleep(0.6)
+                    raise RuntimeError("点击多元裂缝后未确认关卡地图，已停止导航")
+                visible = [h for h in hits if not any(
+                    label in h.text for label in ("重置时间", "剩余时间", "展示时间"))]
+                unchanged = previous and visible and len(previous) == len(visible) and all(
+                    a.text == b.text and abs(a.y - b.y) < 12
+                    for a, b in zip(previous, visible))
+                if unchanged or attempt == 8:
+                    break
+                previous = visible
+                self._swipe(1290, start, 1290, end, 650, 0.8)
+        raise RuntimeError("活动列表双向查找后仍未找到多元裂缝，请确认入口是否开放")
 
     def _open_quick_detail(self, stage: str) -> None:
         self._rift()

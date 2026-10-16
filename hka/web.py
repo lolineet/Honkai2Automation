@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import hashlib
 import os
 import socket
@@ -14,6 +15,8 @@ from .adb import AdbDevice
 from .config import ConfigError, load_config, save_config, validate_config
 from .runner import TaskRunner
 from .vision import crop_template, template_path
+from .mail_credentials import protect_secret
+from .notify import email_options, send_email
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -33,15 +36,30 @@ def config_snapshot(path: Path) -> dict:
     raw = path.read_bytes()
     data = json.loads(raw.decode("utf-8"))
     validate_config(data)
+    email = data.get('notifications', {}).get('email', {})
+    email['has_authorization_code'] = bool(email.pop('authorization_code_encrypted', ''))
+    email.pop('authorization_code', None)
     data["_revision"] = hashlib.sha256(raw).hexdigest()
     return data
 
 
 def save_config_snapshot(path: Path, data: dict) -> str:
-    value = dict(data)
+    value = copy.deepcopy(data)
     if value.pop("_revision", None) != config_revision(path):
         raise ConfigError("配置已更新，请刷新页面后再保存，避免旧页面覆盖新流程")
     value.setdefault("runtime", {})["scheduler_enabled"] = False
+    email = value.setdefault('notifications', {}).setdefault('email', {})
+    current = load_config(path).get('notifications', {}).get('email', {})
+    secret = email.pop('authorization_code', '').strip()
+    email.pop('has_authorization_code', None)
+    email.pop('authorization_code_encrypted', None)
+    if secret:
+        email['authorization_code_encrypted'] = protect_secret(secret)
+    elif all(email.get(key, '') == current.get(key, '') for key in ('qq_number', 'username', 'host', 'provider')):
+        if current.get('authorization_code_encrypted'):
+            email['authorization_code_encrypted'] = current['authorization_code_encrypted']
+    if email.get('enabled'):
+        email_options(email)
     save_config(path, value)
     return config_revision(path)
 
@@ -156,6 +174,10 @@ def serve(config_path: Path, port: int = 8765) -> None:
                     device = AdbDevice(config["emulator"])
                     device.connect()
                     return self._json({"serial": device.serial, "package": device.package, "installed": device.installed(), "size": device.size()})
+                if route == '/api/test-email':
+                    email = load_config(config_path).get('notifications', {}).get('email', {})
+                    send_email(email, title='HKA 测试邮件', body='邮件通知配置成功。装备仓库已满或任务失败时，将按通知设置发送提醒。')
+                    return self._json({'ok': True})
                 if route == "/api/run":
                     state.start_run(data.get("tasks"), bool(data.get("force", False)))
                     return self._json({"ok": True})

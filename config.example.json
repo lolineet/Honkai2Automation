@@ -23,8 +23,11 @@
     "webhooks": [],
     "email": {
       "enabled": false,
-      "host": "",
-      "port": 587,
+      "provider": "qq",
+      "qq_number": "",
+      "host": "smtp.qq.com",
+      "port": 465,
+      "security": "ssl",
       "username": "",
       "sender": "",
       "recipient": "",

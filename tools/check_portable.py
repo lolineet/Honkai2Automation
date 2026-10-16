@@ -23,6 +23,10 @@ def main():
         package = relocated / "HKA-Windows-x64"
         python = str(package / "runtime" / "python.exe")
         environment = dict(os.environ, HKA_NO_BROWSER="1", PYTHONPATH="", PYTHONHOME="")
+        subprocess.run([python, '-c',
+                        "from hka.mail_credentials import protect_secret, unprotect_secret; "
+                        "assert unprotect_secret(protect_secret('portable-test-only')) == 'portable-test-only'"],
+                       cwd=package, env=environment, check=True)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
             adb_port = str(probe.getsockname()[1])
