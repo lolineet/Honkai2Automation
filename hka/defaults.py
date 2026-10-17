@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     "tasks": [
         {"id": "launch", "name": "启动崩坏2", "kind": "daily", "enabled": True, "schedule": {"type": "daily"},
          "steps": [{"type": "launch_game", "wait": 20}, {"type": "game_flow", "flow": "enter_game"}]},
-        {"id": "signin", "name": "签到与连登奖励", "kind": "daily", "enabled": True, "always_run": True, "schedule": {"type": "daily"},
+        {"id": "signin", "name": "签到、连登与生日奖励", "kind": "daily", "enabled": True, "always_run": True, "schedule": {"type": "daily"},
          "steps": [{"type": "game_flow", "flow": "claim_login_rewards"}]},
         {"id": "dismiss_popups", "name": "关闭登录弹窗", "kind": "daily", "enabled": False, "schedule": {"type": "daily"},
          "steps": [{"type": "repeat", "times": 6, "steps": [{"type": "tap_image", "image": "popup_close.png", "region": [0.65, 0.08, 0.95, 0.5], "timeout": 2, "on_missing": "break_repeat", "wait": 0.7}]},
@@ -71,12 +71,5 @@ DEFAULT_CONFIG = {
                    {"type": "tap_image", "image": "event_entry.png", "on_missing": "skip_task", "timeout": 3},
                    {"type": "repeat", "times": 10, "steps": [{"type": "tap_image", "image": "event_claim.png", "timeout": 2, "on_missing": "break_repeat", "wait": 1}]},
                    {"type": "key", "code": 4}]},
-        {"id": "birthday_rewards", "name": "角色生日奖励", "kind": "birthday", "enabled": False,
-         "schedule": {"type": "dates", "dates": ["01-01"]},
-         "steps": [{"type": "tap_image", "image": "social.png", "region": [0.75, 0, 0.95, 0.2], "timeout": 8, "wait": 0.6},
-                   {"type": "tap_image", "image": "mail.png", "region": [0.32, 0.35, 0.7, 0.62], "timeout": 8, "wait": 0.6},
-                   {"type": "tap_image", "image": "mail_claim.png", "region": [0.75, 0.12, 1, 0.33], "timeout": 8, "wait": 1},
-                   {"type": "tap_image", "image": "back.png", "region": [0, 0.12, 0.15, 0.3], "timeout": 5, "wait": 0.5},
-                   {"type": "tap_image", "image": "home_nav.png", "region": [0.4, 0, 0.6, 0.2], "timeout": 5, "wait": 0.5}]},
     ],
 }

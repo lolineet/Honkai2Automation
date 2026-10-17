@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import copy
 import hashlib
 import os
@@ -106,7 +107,8 @@ class WebState:
         threading.Thread(target=worker, daemon=True).start()
 
 
-def serve(config_path: Path, port: int = 8765) -> None:
+def serve(config_path: Path, port: int = 8765, *, fallback_port: bool = False,
+          ready_path: Path | None = None) -> None:
     state = WebState(config_path)
 
     class Handler(BaseHTTPRequestHandler):
@@ -214,12 +216,22 @@ def serve(config_path: Path, port: int = 8765) -> None:
         def log_message(self, format: str, *args: object) -> None:
             return
 
-    server = LocalServer(("127.0.0.1", port), Handler)
-    address = f"http://127.0.0.1:{port}/"
-    print(f"配置界面: {address}")
-    if os.getenv("HKA_NO_BROWSER") != "1":
-        webbrowser.open(address)
     try:
+        server = LocalServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        if not fallback_port or not (exc.errno == errno.EADDRINUSE or getattr(exc, "winerror", None) == 10048):
+            raise
+        server = LocalServer(("127.0.0.1", 0), Handler)
+        print(f"端口 {port} 已占用，已自动选择空闲端口")
+    address = f"http://127.0.0.1:{server.server_address[1]}/"
+    try:
+        if ready_path is not None:
+            ready_path.write_text(address, encoding="utf-8")
+        print(f"配置界面: {address}")
+        if os.getenv("HKA_NO_BROWSER") != "1":
+            webbrowser.open(address)
         server.serve_forever()
     finally:
         server.server_close()
+        if ready_path is not None:
+            ready_path.unlink(missing_ok=True)

@@ -5,6 +5,7 @@ import site
 import sys
 import webbrowser
 import shutil
+import time
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -24,11 +25,18 @@ if lock.tell() == 0:
     lock.flush()
 lock.seek(0)
 silent = "--no-browser" in sys.argv
+url_path = ROOT / "runs" / "assistant-url.txt"
 try:
     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
 except OSError:
     if not silent:
-        webbrowser.open("http://127.0.0.1:8765/#tasks")
+        for _ in range(50):
+            if url_path.exists():
+                webbrowser.open(url_path.read_text(encoding="utf-8").strip() + "#tasks")
+                break
+            time.sleep(0.1)
+        else:
+            print("助手正在启动，请稍后重新打开。")
     raise SystemExit(0)
 
 # Opening the assistant never runs game tasks. The Run button starts the pipeline.
@@ -37,7 +45,8 @@ if silent:
 else:
     os.environ.pop("HKA_NO_BROWSER", None)
 from hka.web import serve
+url_path.unlink(missing_ok=True)
 try:
-    serve(ROOT / "config.json", 8765)
+    serve(ROOT / "config.json", 8765, fallback_port=True, ready_path=url_path)
 except KeyboardInterrupt:
     pass

@@ -58,7 +58,7 @@
     },
     {
       "id": "signin",
-      "name": "签到与连登奖励",
+      "name": "签到、连登与生日奖励",
       "kind": "daily",
       "enabled": true,
       "schedule": {
@@ -494,80 +494,6 @@
         {
           "type": "key",
           "code": 4
-        }
-      ]
-    },
-    {
-      "id": "birthday_rewards",
-      "name": "角色生日奖励",
-      "kind": "birthday",
-      "enabled": false,
-      "schedule": {
-        "type": "dates",
-        "dates": [
-          "01-01"
-        ]
-      },
-      "steps": [
-        {
-          "type": "tap_image",
-          "image": "social.png",
-          "region": [
-            0.75,
-            0,
-            0.95,
-            0.2
-          ],
-          "timeout": 8,
-          "wait": 0.6
-        },
-        {
-          "type": "tap_image",
-          "image": "mail.png",
-          "region": [
-            0.32,
-            0.35,
-            0.7,
-            0.62
-          ],
-          "timeout": 8,
-          "wait": 0.6
-        },
-        {
-          "type": "tap_image",
-          "image": "mail_claim.png",
-          "region": [
-            0.75,
-            0.12,
-            1,
-            0.33
-          ],
-          "timeout": 8,
-          "wait": 1
-        },
-        {
-          "type": "tap_image",
-          "image": "back.png",
-          "region": [
-            0,
-            0.12,
-            0.15,
-            0.3
-          ],
-          "timeout": 5,
-          "wait": 0.5
-        },
-        {
-          "type": "tap_image",
-          "image": "home_nav.png",
-          "region": [
-            0.4,
-            0,
-            0.6,
-            0.2
-          ],
-          "timeout": 5,
-          "wait": 0.5
         }
       ]
     }

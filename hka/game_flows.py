@@ -188,7 +188,8 @@ class GameFlows:
                     update_started = True
                 self.sleep(1)
                 continue
-            if any("首页" in hit.text and 750 <= hit.x <= 900 and hit.y < 135 for hit in hits):
+            if (any("首页" in hit.text and 750 <= hit.x <= 900 and hit.y < 135 for hit in hits)
+                    or self._birthday_reward_stage(hits) or self._login_reward_page(hits)):
                 self.log("已进入游戏")
                 return
             if find_text(hits, "选择服务器"):
@@ -210,6 +211,20 @@ class GameFlows:
         raise RuntimeError("游戏更新或进入游戏超时，请检查模拟器中的更新、登录或加载提示")
 
     @staticmethod
+    def _birthday_reward_stage(hits: list[TextHit]) -> str | None:
+        message = "".join(re.sub(r"\s+", "", hit.text) for hit in hits
+                          if 480 <= hit.x <= 1100 and 240 <= hit.y <= 350)
+        if "有你的祝福" in message and "开心" in message:
+            return "claim"
+        titles = "".join(hit.text.upper() for hit in hits
+                         if 750 <= hit.x <= 1550 and 180 <= hit.y <= 480)
+        date = any(750 <= hit.x <= 1250 and 450 <= hit.y <= 600 and
+                   re.fullmatch(r"\s*\d{1,2}\s*/\s*\d{1,2}\s*", hit.text) for hit in hits)
+        if "HAPPY" in titles and "BIRTHDAY" in titles and date:
+            return "wish"
+        return None
+
+    @staticmethod
     def _login_reward_page(hits: list[TextHit]) -> str | None:
         titles = [hit.text for hit in hits if 400 <= hit.x <= 1100 and 200 <= hit.y <= 340]
         days = [hit for hit in hits if 330 <= hit.x <= 1250 and 400 <= hit.y <= 550
@@ -228,22 +243,50 @@ class GameFlows:
         pending = None
         idle = 0
         waiting = 0
+        birthday_actions: set[str] = set()
         for _ in range(40):
             self._check_cancel()
             hits = self._hits()
             if self._dismiss_navigation_notice(hits):
                 if pending:
                     claimed.append(pending)
-                    self.log(f"已确认领取{pending}奖励")
+                    self.log(f"已确认领取：{pending}")
                     pending = None
                 idle = 0
                 continue
-            page = self._login_reward_page(hits)
+            birthday_stage = self._birthday_reward_stage(hits)
+            page = "角色生日奖励" if birthday_stage else self._login_reward_page(hits)
             if pending and page != pending:
                 claimed.append(pending)
-                self.log(f"已确认领取{pending}奖励")
+                self.log(f"已确认领取：{pending}")
                 pending = None
                 waiting = 0
+            if birthday_stage:
+                idle = 0
+                if birthday_stage in birthday_actions or page in claimed:
+                    waiting += 1
+                    if waiting >= 8:
+                        raise RuntimeError("角色生日奖励操作后页面未变化，停止重复点击")
+                    self.sleep(0.6)
+                    continue
+                label = "生日快乐" if birthday_stage == "wish" else "领取"
+                buttons = [hit for hit in hits if hit.text.strip() == label and (
+                    1000 <= hit.x <= 1350 and 600 <= hit.y <= 730 if birthday_stage == "wish"
+                    else 650 <= hit.x <= 900 and 520 <= hit.y <= 620)]
+                if len(buttons) != 1:
+                    waiting += 1
+                    if waiting >= 8:
+                        raise RuntimeError(f"已识别角色生日奖励，但未确认{label}按钮")
+                    self.sleep(0.6)
+                    continue
+                button = buttons[0]
+                self.log("送上角色生日祝福" if birthday_stage == "wish" else "领取角色生日奖励")
+                self._tap(button.x + button.width // 2, button.y + button.height // 2, 1)
+                birthday_actions.add(birthday_stage)
+                if birthday_stage == "claim":
+                    pending = page
+                waiting = 0
+                continue
             if page is not None:
                 idle = 0
                 if pending or page in claimed:
@@ -268,10 +311,12 @@ class GameFlows:
                 continue
             idle += 1
             if idle >= 3:
-                self.log(f"签到与连登奖励处理完成，共领取 {len(claimed)} 份")
+                if "wish" in birthday_actions and "claim" not in birthday_actions:
+                    raise RuntimeError("已送上生日祝福，但未确认生日奖励领取弹窗")
+                self.log(f"签到、连登与角色生日奖励处理完成，共领取 {len(claimed)} 份")
                 return {"claimed": len(claimed), "pages": claimed}
             self.sleep(0.6)
-        raise RuntimeError("签到与连登奖励处理超过检查上限")
+        raise RuntimeError("每日登录奖励处理超过检查上限")
 
     def refresh_resonance(self, options: dict[str, Any]) -> None:
         self._shop()

@@ -47,7 +47,7 @@ def main():
                        cwd=package, env=environment, check=True)
         bootstrap = (
             "import runpy, hka.web; "
-            "hka.web.serve=lambda *args: None; "
+            "hka.web.serve=lambda *args, **kwargs: None; "
             "runpy.run_path('start_hka.pyw', run_name='__main__')"
         )
         subprocess.run([python, "-c", bootstrap], cwd=package, env=environment, check=True)
