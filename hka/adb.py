@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 import threading
@@ -187,7 +188,35 @@ class AdbDevice:
         self._run("shell", "input", "keyevent", str(code))
 
     def launch_game(self) -> None:
-        self._run("shell", "monkey", "-p", self.package, "-c", "android.intent.category.LAUNCHER", "1")
+        intent = ("-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER")
+        errors = []
+        # Some emulator images omit monkey. Resolve the installed launcher rather
+        # than hardcoding an Activity, which can differ between game channels.
+        for resolver in (("cmd", "package"), ("pm",)):
+            try:
+                output = self._run("shell", *resolver, "resolve-activity", "--brief",
+                                   *intent, "-p", self.package)
+                component = next((line.strip() for line in reversed(output.splitlines())
+                                  if re.fullmatch(re.escape(self.package) + r"/[\w.$]+", line.strip())), None)
+                if component is None:
+                    errors.append(f"{' '.join(resolver)}: {output}")
+                    continue
+                output = self._run("shell", "am", "start", *intent, "-n", component)
+                # Android tools may print a failure while returning exit code 0.
+                if re.search(r"(?im)^\s*(?:error\b|exception\b|securityexception\b)", output):
+                    raise AdbError(output)
+                return
+            except AdbError as exc:
+                errors.append(str(exc))
+        try:
+            output = self._run("shell", "monkey", "-p", self.package,
+                               "-c", "android.intent.category.LAUNCHER", "1")
+            if re.search(r"(?i)monkey aborted|no activities found|inaccessible or not found", output):
+                raise AdbError(output)
+        except AdbError as exc:
+            errors.append(str(exc))
+            raise AdbError(f"无法启动游戏 {self.package}，请确认游戏已安装且包名与渠道一致。"
+                           + " 启动详情: " + "；".join(errors)) from exc
 
     def installed(self) -> bool:
         output = self._run("shell", "pm", "path", self.package)
