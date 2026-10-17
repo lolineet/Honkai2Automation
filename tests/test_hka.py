@@ -207,12 +207,15 @@ class RunnerTests(unittest.TestCase):
 
     def test_event_and_birthday_do_not_run_outside_dates(self):
         config = json.loads(json.dumps(DEFAULT_CONFIG))
-        config["tasks"] = config["tasks"][-2:]
-        for task in config["tasks"]:
-            task["enabled"] = True
-        runner = TaskRunner(config, Path("config.json"), device=FakeDevice(screen_png()), log=lambda _: None)
-        runner.today = date(2026, 10, 1)
-        self.assertEqual(runner.plan(), [])
+        config["tasks"] = [
+            {"id": "event", "name": "活动", "kind": "event", "enabled": True,
+             "schedule": {"type": "range", "start": "2099-01-01", "end": "2099-01-07"}, "steps": []},
+            {"id": "birthday", "name": "自定义日期", "kind": "birthday", "enabled": True,
+             "schedule": {"type": "dates", "dates": ["01-01"]}, "steps": []}]
+        with tempfile.TemporaryDirectory() as temp:
+            runner = TaskRunner(config, Path(temp) / "config.json", device=FakeDevice(screen_png()), log=lambda _: None)
+            runner.today = date(2026, 10, 1)
+            self.assertEqual(runner.plan(), [])
 
     def test_cancel_prevents_task_execution(self):
         with tempfile.TemporaryDirectory() as temp:
