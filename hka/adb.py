@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import io
+import json
 import re
 import subprocess
 import time
@@ -40,6 +42,7 @@ class AdbDevice:
         self.launch_delay = float(config.get("launch_delay", 10))
         self._owned_process: subprocess.Popen | None = None
         self.cancel: threading.Event | None = None
+        self._screenshot_command = ("exec-out", "screencap", "-p")
 
     def _check_cancel(self) -> None:
         if self.cancel is not None and self.cancel.is_set():
@@ -114,6 +117,7 @@ class AdbDevice:
                 self._owned_process.kill()
 
     def connect(self) -> None:
+        self._refresh_mumu_address()
         if self.serial.lower() in {"auto", "自动"}:
             self.serial = self._detect_emulator()
         connect_message = ""
@@ -123,17 +127,59 @@ class AdbDevice:
                 connect_message = (result.stdout + result.stderr).decode("utf-8", errors="replace").strip()
             except (OSError, subprocess.TimeoutExpired) as exc:
                 raise self._execution_error(exc) from exc
+        for attempt in range(4):
+            self._check_cancel()
+            try:
+                state = self._run("get-state", timeout=5)
+                if state == "device":
+                    return
+                raise AdbError(f"设备未就绪: {self.serial} ({state})")
+            except AdbError as exc:
+                # Older packages shipped this placeholder, not MuMu's actual port.
+                if self.serial in {"127.0.0.1:5555", "localhost:5555"}:
+                    self.serial = self._detect_emulator()
+                if attempt == 3:
+                    detail = f"；连接响应: {connect_message}" if connect_message else ""
+                    raise AdbError(f"无法连接设备 {self.serial}: {exc}{detail}") from exc
+                # A connect response can precede transport readiness, especially
+                # after recovering a closed screenshot stream.
+                self._wait(0.5 * (attempt + 1))
+
+    def _refresh_mumu_address(self) -> None:
+        # MuMu can keep a stale ADB transport alive after its window has exited,
+        # then assign a different port on launch. Only resolve an explicitly
+        # configured instance; never guess between other connected emulators.
+        executable = Path(self.emulator_path)
+        if executable.name.lower() != "mumumanager.exe" or not executable.is_file():
+            return
+        if not (self.serial.lower() in {"auto", "自动"} or
+                self.serial.startswith(("127.0.0.1:", "localhost:", "emulator-"))):
+            return
+        index = None
+        for position, arg in enumerate(self.emulator_args):
+            if arg in {"-v", "--vmindex"} and position + 1 < len(self.emulator_args):
+                index = self.emulator_args[position + 1]
+                break
+            if arg.startswith("--vmindex="):
+                index = arg.split("=", 1)[1]
+                break
+        if index is None or not index.isdigit():
+            return
         try:
-            state = self._run("get-state", timeout=15)
-        except AdbError as exc:
-            # Older packages shipped this placeholder, which is not MuMu's actual port.
-            if self.serial in {"127.0.0.1:5555", "localhost:5555"}:
-                self.serial = self._detect_emulator()
-                state = self._run("get-state", timeout=15)
-            else:
-                raise AdbError(f"无法连接设备 {self.serial}: {connect_message or exc}") from exc
-        if state != "device":
-            raise AdbError(f"设备未就绪: {self.serial} ({state})")
+            result = self._execute([str(executable), "info", "-v", index], 10)
+            if result.returncode:
+                return
+            info = json.loads(result.stdout.decode("utf-8-sig"))
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return
+        if not isinstance(info, dict) or str(info.get("index")) != index:
+            return
+        if info.get("is_process_started") is False or info.get("is_android_started") is False:
+            raise AdbError(f"MuMu 实例 {index} 尚未启动完成，旧 ADB 地址可能仍显示在线，请启动该实例后重试")
+        port = info.get("adb_port")
+        host = info.get("adb_host_ip", "127.0.0.1")
+        if type(port) is int and 0 < port < 65536 and host in {"127.0.0.1", "localhost"}:
+            self.serial = f"{host}:{port}"
 
     def _detect_emulator(self) -> str:
         try:
@@ -167,10 +213,44 @@ class AdbDevice:
         raise AdbError(f"模拟器启动超时: {last_error}")
 
     def screen(self) -> bytes:
-        data = self._run("exec-out", "screencap", "-p", timeout=30, binary=True)
-        if not data.startswith(b"\x89PNG"):
-            raise AdbError("模拟器截图不是 PNG 数据")
-        return data
+        errors = []
+        fallback = ("shell", "-T", "screencap", "-p")
+        alternative = fallback if self._screenshot_command[0] == "exec-out" else ("exec-out", "screencap", "-p")
+        for attempt, command in enumerate((self._screenshot_command, alternative, self._screenshot_command)):
+            self._check_cancel()
+            try:
+                if attempt == 1:
+                    # Reset this device's transport only, keeping other emulators
+                    # and tools using the shared ADB server connected.
+                    self._refresh_mumu_address()
+                    if ":" in self.serial:
+                        self._execute([self.adb_path, "disconnect", self.serial], 5)
+                    else:
+                        self._run("reconnect", timeout=5)
+                    self.connect()
+                elif attempt == 2:
+                    self._wait(1)
+                    self.connect()
+                data = self._run(*command, timeout=10, binary=True)
+                self._validate_screenshot(data)
+                self._screenshot_command = command
+                return data
+            except (AdbError, OSError, subprocess.TimeoutExpired) as exc:
+                errors.append(str(exc))
+        raise AdbError(f"模拟器截图失败（{self.serial}），重连及备用截图均未恢复。"
+                       "请确认对应模拟器已启动并能正常显示画面，必要时重启该实例后重试。详情: "
+                       + "；".join(errors))
+
+    @staticmethod
+    def _validate_screenshot(data: bytes) -> None:
+        from PIL import Image
+        try:
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("不是 PNG 数据")
+            with Image.open(io.BytesIO(data)) as screenshot:
+                screenshot.verify()
+        except (OSError, ValueError, SyntaxError) as exc:
+            raise AdbError(f"模拟器截图无效或不完整: {exc}") from exc
 
     def size(self) -> tuple[int, int]:
         import io

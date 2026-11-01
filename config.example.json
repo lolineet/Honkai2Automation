@@ -126,64 +126,23 @@
       },
       "steps": [
         {
-          "type": "tap_image",
-          "image": "social.png",
-          "region": [
-            0.75,
-            0,
-            0.95,
-            0.2
-          ],
-          "timeout": 8,
-          "wait": 0.6
-        },
+          "type": "game_flow",
+          "flow": "claim_mail"
+        }
+      ]
+    },
+    {
+      "id": "guild_daily",
+      "name": "领取社团每日奖励",
+      "kind": "daily",
+      "enabled": true,
+      "schedule": {
+        "type": "daily"
+      },
+      "steps": [
         {
-          "type": "tap_image",
-          "image": "mail.png",
-          "region": [
-            0.32,
-            0.35,
-            0.7,
-            0.62
-          ],
-          "timeout": 8,
-          "wait": 0.6
-        },
-        {
-          "type": "tap_image",
-          "image": "mail_claim.png",
-          "region": [
-            0.75,
-            0.12,
-            1,
-            0.33
-          ],
-          "timeout": 8,
-          "wait": 1
-        },
-        {
-          "type": "tap_image",
-          "image": "back.png",
-          "region": [
-            0,
-            0.12,
-            0.15,
-            0.3
-          ],
-          "timeout": 5,
-          "wait": 0.5
-        },
-        {
-          "type": "tap_image",
-          "image": "home_nav.png",
-          "region": [
-            0.4,
-            0,
-            0.6,
-            0.2
-          ],
-          "timeout": 5,
-          "wait": 0.5
+          "type": "game_flow",
+          "flow": "claim_guild_daily"
         }
       ]
     },

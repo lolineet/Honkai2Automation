@@ -487,16 +487,20 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_activity_uses_hours_remaining_and_excludes_maze(self):
         flow = GameFlows.__new__(GameFlows)
-        flow._battle_picker = lambda: [
+        flow._battle_picker = Mock()
+        flow._click = Mock()
+        flow._hits = lambda *args, **kwargs: [
             TextHit("空想迷域", 1, 1230, 230, 120, 25),
             TextHit("难度指数：B", 1, 1320, 270, 150, 25),
             TextHit("剩余时间：5天", 1, 1300, 290, 150, 25),
             TextHit("难度指数：B", 1, 560, 270, 150, 25),
             TextHit("剩余时间：0天10小时", 1, 500, 290, 200, 25)]
         flow._text = lambda *args, **kwargs: None
+        flow._screen = lambda: b"map"
         taps = []
         flow._tap = lambda *args, **kwargs: taps.append(args)
-        flow._activity()
+        with patch("hka.game_flows.stage_labels", return_value=[TextHit("1-1", 1, 410, 305, 73, 44)]):
+            flow._activity()
         self.assertEqual(taps, [(370, 385, 1.0)])
 
     def test_failed_result_is_not_recorded_as_a_win(self):

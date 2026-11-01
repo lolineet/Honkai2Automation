@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -21,8 +22,40 @@ def load_config(path: str | Path) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"无法读取配置 {path}: {exc}") from exc
+    upgrade_legacy_mail(data)
+    upgrade_guild_daily(data)
     validate_config(data)
     return data
+
+
+def upgrade_legacy_mail(data: Any) -> None:
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        return
+    images = ["social.png", "mail.png", "mail_claim.png", "back.png", "home_nav.png"]
+    for task in data["tasks"]:
+        if not isinstance(task, dict) or task.get("id") != "mail":
+            continue
+        steps = task.get("steps")
+        if (isinstance(steps, list) and len(steps) == len(images) and
+                all(isinstance(step, dict) and step.get("type") == "tap_image" and
+                    step.get("image") == image and not any(key in step for key in ("offset_x", "offset_y"))
+                    for step, image in zip(steps, images))):
+            task["steps"] = [{"type": "game_flow", "flow": "claim_mail"}]
+
+
+def upgrade_guild_daily(data: Any) -> None:
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        return
+    tasks = data["tasks"]
+    ids = {task.get("id") for task in tasks if isinstance(task, dict) and isinstance(task.get("id"), str)}
+    # Upgrade the standard daily workflow, preserving custom workflows and an
+    # existing guild task's enabled state, position and authored steps.
+    if "guild_daily" in ids or not {"launch", "signin", "mail", "resonance_refresh"} <= ids:
+        return
+    from .defaults import DEFAULT_CONFIG
+    guild = next(task for task in DEFAULT_CONFIG["tasks"] if task["id"] == "guild_daily")
+    position = next(i for i, task in enumerate(tasks) if isinstance(task, dict) and task.get("id") == "mail")
+    tasks.insert(position + 1, copy.deepcopy(guild))
 
 
 def save_config(path: str | Path, data: dict[str, Any]) -> None:
@@ -150,7 +183,7 @@ def validate_steps(steps: Any, location: str) -> None:
             raise ConfigError(f"{where}.type 无效")
         kind = step["type"]
         if kind == "game_flow":
-            if step.get("flow") not in {"enter_game", "claim_login_rewards", "refresh_resonance", "free_gift", "quick_battle", "stamina_farm", "expeditions", "claim_presence", "claim_weekly", "bonus_double_stamina"}:
+            if step.get("flow") not in {"enter_game", "claim_login_rewards", "claim_mail", "claim_guild_daily", "refresh_resonance", "free_gift", "quick_battle", "stamina_farm", "expeditions", "claim_presence", "claim_weekly", "bonus_double_stamina"}:
                 raise ConfigError(f"{where}.flow 无效")
             options = step.get("options", {})
             if not isinstance(options, dict):

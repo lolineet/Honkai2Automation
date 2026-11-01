@@ -121,6 +121,7 @@ class GameFlows:
         return False
 
     def _home(self) -> None:
+        clicked_home = False
         for _ in range(8):
             hits = self._hits()
             modal = [h for h in hits if 300 <= h.x <= 1300 and 220 <= h.y <= 730]
@@ -131,13 +132,33 @@ class GameFlows:
                 continue
             if self._dismiss_navigation_notice(hits) or self._dismiss_navigation_card():
                 continue
+            screenshot = self._screen()
             hit = next((hit for hit in hits if "首页" in hit.text and
                         750 <= hit.x <= 890 and 70 <= hit.y < 130), None)
             if hit:
+                active = find_image(screenshot, Path(__file__).parent / "assets", {
+                    "image": "home_active.png", "region": [0.47, 0, 0.56, 0.15], "threshold": 0.94})
+                # The task panel also highlights Home. A click must first
+                # return to the character screen before callers open its menu.
+                sidebar = [h for h in hits if h.x < 180 and 250 <= h.y < 650]
+                task_panel = sum(find_text(sidebar, label) is not None for label in
+                                 ("存在感", "每周任务", "使魔探险")) >= 2
+                if active and clicked_home and not task_panel:
+                    return
                 self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2, 2.5)
-                return
+                clicked_home = True
+                continue
+            # Full-screen chapters replace the top menu with a house icon.
+            # It returns to the battle picker; then use its normal Home tab.
+            home = find_image(screenshot, Path(__file__).parent / "assets", {
+                "image": "navigation_home.png", "region": [0.075, 0.015, 0.16, 0.13],
+                "threshold": 0.94})
+            if home:
+                self.log("通过章节首页图标恢复顶部导航")
+                self._tap(home[0], home[1], 1.5)
+                continue
             self.sleep(0.6)
-        raise RuntimeError("未确认顶部首页入口，已停止导航")
+        raise RuntimeError("未确认顶部首页入口或首页激活状态，已停止导航")
 
     def _shop(self) -> None:
         self._home()
@@ -318,6 +339,147 @@ class GameFlows:
             self.sleep(0.6)
         raise RuntimeError("每日登录奖励处理超过检查上限")
 
+    @staticmethod
+    def _mailbox_page(hits: list[TextHit]) -> bool:
+        header = [h for h in hits if 1020 <= h.x <= 1560 and 125 <= h.y <= 225]
+        return find_text(header, "体力领取") is not None and find_text(header, "一键领取") is not None
+
+    def claim_mail(self, options: dict[str, Any]) -> dict[str, Any]:
+        self._home()
+        for _ in range(8):
+            hits = self._hits()
+            if self._mailbox_page(hits):
+                break
+            messages = next((h for h in hits if h.text.strip() == "我的消息" and
+                             650 <= h.x <= 1000 and 390 <= h.y <= 520), None)
+            if messages:
+                self._tap(messages.x + messages.width // 2, messages.y + messages.height // 2, 1)
+                continue
+            if self._dismiss_navigation_notice(hits) or self._dismiss_navigation_card():
+                continue
+            social = next((h for h in hits if h.text.strip() == "社交" and
+                           1280 <= h.x <= 1450 and 40 <= h.y <= 140), None)
+            if social:
+                self._tap(social.x + social.width // 2, social.y + social.height // 2, 1.5)
+            else:
+                self.sleep(0.6)
+        else:
+            raise RuntimeError("未确认我的消息邮箱页面，未领取邮件")
+        buttons = [h for h in hits if h.text.strip() == "一键领取" and
+                   1320 <= h.x <= 1560 and 125 <= h.y <= 225]
+        if len(buttons) != 1:
+            raise RuntimeError("未确认邮箱的一键领取按钮，未领取邮件")
+        button = buttons[0]
+        self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.2)
+        claimed = False
+        stable = 0
+        for _ in range(12):
+            hits = self._hits()
+            if self._dismiss_navigation_notice(hits):
+                claimed = True
+                stable = 0
+                continue
+            # With no eligible attachments the game keeps displaying the inbox.
+            # Confirm that page repeatedly, rather than interpreting any missing
+            # receipt or an unrelated popup as an empty mailbox.
+            stable = stable + 1 if self._mailbox_page(hits) else 0
+            if stable >= 4:
+                self._home()
+                if claimed:
+                    self.log("邮件附件领取完成")
+                    return {"claimed": True}
+                raise SkipTask("邮箱没有可领取附件")
+            self.sleep(0.5)
+        raise RuntimeError("邮件领取后未回到邮箱，未确认处理结果")
+
+    @staticmethod
+    def _guild_info_page(hits: list[TextHit]) -> bool:
+        labels = [h for h in hits if 550 <= h.x <= 1350 and 250 <= h.y <= 500]
+        return find_text(labels, "社团名") is not None and find_text(labels, "成员数") is not None
+
+    @staticmethod
+    def _guild_reward_dialog(hits: list[TextHit]) -> bool:
+        title = "".join(h.text for h in hits if 500 <= h.x <= 1100 and 150 <= h.y <= 250)
+        return "昨日社团" in title and "贡献奖励" in title
+
+    @staticmethod
+    def _guild_success_dialog(hits: list[TextHit]) -> bool:
+        message = "".join(h.text for h in hits if 450 <= h.x <= 1100 and 300 <= h.y <= 480)
+        return "奖励领取成功" in message and any(
+            "社团宣言" in h.text or "活跃度" in h.text for h in hits)
+
+    def claim_guild_daily(self, options: dict[str, Any]) -> dict[str, Any]:
+        hits = self._hits()
+        resuming = self._guild_success_dialog(hits)
+        if not resuming:
+            self._home()
+            for _ in range(8):
+                hits = self._hits()
+                if self._guild_info_page(hits) or self._guild_reward_dialog(hits):
+                    break
+                if any(any(word in h.text for word in ("尚未加入社团", "未加入任何社团", "未加入社团"))
+                       for h in hits if 200 <= h.x <= 1400 and 150 <= h.y <= 800):
+                    self._home()
+                    raise SkipTask("尚未加入社团，跳过社团每日奖励")
+                entry = next((h for h in hits if h.text.strip() == "我的社团" and
+                              700 <= h.x <= 1020 and 240 <= h.y <= 370), None)
+                if entry:
+                    self._tap(entry.x + entry.width // 2, entry.y + entry.height // 2, 1.5)
+                    continue
+                if self._dismiss_navigation_notice(hits) or self._dismiss_navigation_card():
+                    continue
+                social = next((h for h in hits if h.text.strip() == "社交" and
+                               1280 <= h.x <= 1450 and 40 <= h.y <= 140), None)
+                if social:
+                    self._tap(social.x + social.width // 2, social.y + social.height // 2, 1.5)
+                else:
+                    self.sleep(0.6)
+            else:
+                raise RuntimeError("未确认我的社团信息页面，未领取社团奖励")
+
+        opened = resuming
+        submitted = resuming
+        acknowledged = False
+        for _ in range(16):
+            self._check_cancel()
+            if self._guild_reward_dialog(hits):
+                if not submitted:
+                    buttons = [h for h in hits if h.text.strip() == "领取" and
+                               580 <= h.x <= 800 and 600 <= h.y <= 720]
+                    if len(buttons) != 1:
+                        raise RuntimeError("未确认社团贡献奖励弹窗的领取按钮")
+                    button = buttons[0]
+                    self.log("领取昨日社团贡献奖励")
+                    self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.6)
+                    submitted = True
+            elif submitted and self._guild_success_dialog(hits):
+                if not acknowledged:
+                    buttons = [h for h in hits if h.text.strip() == "确定" and
+                               650 <= h.x <= 900 and 500 <= h.y <= 620]
+                    if len(buttons) != 1:
+                        raise RuntimeError("已收到社团奖励，但未确认成功提示的确定按钮")
+                    button = buttons[0]
+                    self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.6)
+                    acknowledged = True
+            elif submitted and self._dismiss_navigation_notice(hits):
+                pass
+            elif self._guild_info_page(hits):
+                status = [h for h in hits if 1100 <= h.x <= 1350 and 500 <= h.y <= 625]
+                if any(h.text.strip() in {"已领", "已领取", "不可领", "明日再来"} for h in status):
+                    self._home()
+                    if submitted:
+                        self.log("已确认社团每日奖励领取完成")
+                        return {"claimed": True}
+                    raise SkipTask("社团每日奖励当前不可领，已领取或未满足领取条件")
+                buttons = [h for h in status if h.text.strip() == "可领"]
+                if len(buttons) == 1 and not opened and not submitted:
+                    button = buttons[0]
+                    self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.6)
+                    opened = True
+            self.sleep(0.5)
+            hits = self._hits()
+        raise RuntimeError("社团奖励领取后未确认已领取状态，停止重复点击")
+
     def refresh_resonance(self, options: dict[str, Any]) -> None:
         self._shop()
         self._click("崩坏屋", (1000, 175, 1450, 410))
@@ -396,8 +558,12 @@ class GameFlows:
             if self._dismiss_navigation_notice(self._hits()) or self._dismiss_navigation_card():
                 continue
             screenshot = self._screen()
-            reset = find_image(screenshot, Path(__file__).parent / "assets", {
-                "image": "battle_reset.png", "region": [0.8, 0.16, 1, 0.28], "threshold": 0.94})
+            reset = None
+            for image in ("battle_reset.png", "battle_reset_compact.png"):
+                reset = find_image(screenshot, Path(__file__).parent / "assets", {
+                    "image": image, "region": [0.8, 0.16, 1, 0.28], "threshold": 0.94})
+                if reset:
+                    break
             if reset:
                 self._tap(reset[0], reset[1], 0.8)
                 continue
@@ -552,24 +718,43 @@ class GameFlows:
                 find_text(hits, "今日免费") is None and find_text(hits, "快捷战斗") is None)
 
     def _activity(self) -> None:
-        hits = self._battle_picker()
+        self._battle_picker()
+        self._click("活动", (35, 175, 185, 490))
         # The event artwork moves between releases; use the B difficulty tag and
-        # its nearby remaining-time tag to identify a live activity card.
-        for _ in range(4):
-            difficulty = [h for h in hits if re.search(r"难度指数\s*[:：]?\s*B\b", h.text, re.I)]
-            timers = [h for h in hits if "剩余时间" in h.text and
-                      any(int(value) > 0 for value in re.findall(r"\d+", h.text.split("剩余时间", 1)[1]))]
-            for tag in difficulty:
-                if any("空想迷域" in h.text and abs(h.x - tag.x) < 350 and
-                       abs(h.y - tag.y) < 200 for h in hits):
-                    continue
-                if any(abs(tag.x - timer.x) < 340 and abs(tag.y - timer.y) < 65 for timer in timers):
-                    self._tap(max(300, tag.x - 190), min(820, tag.y + 115), 1.0)
-                    if self._text("空想迷域"):
-                        raise SkipTask("空想迷域不属于本次每日副本流程")
-                    return
-            self._swipe(510, 770, 510, 350)
-            hits = self._hits((180, 160, 1550, 875))
+        # its nearby remaining-time tag to identify a live activity card. Only
+        # the right column scrolls, and it retains the previous task's position.
+        for start, end in ((350, 650), (740, 440)):
+            previous = None
+            for attempt in range(9):
+                hits = self._hits((180, 160, 1550, 875))
+                difficulty = [h for h in hits if re.search(r"难度指数\s*[:：]?\s*B\b", h.text, re.I)
+                              and 190 <= h.y <= 700]
+                timers = [h for h in hits if "剩余时间" in h.text and
+                          any(int(value) > 0 for value in re.findall(r"\d+", h.text.split("剩余时间", 1)[1]))]
+                for tag in difficulty:
+                    same_column = lambda h: (h.x >= 900) == (tag.x >= 900)
+                    if any("空想迷域" in h.text and same_column(h) and
+                           -80 <= h.y - tag.y < 180 for h in hits):
+                        continue
+                    if any(same_column(timer) and abs(tag.x - timer.x) < 340 and
+                           abs(tag.y - timer.y) < 65 for timer in timers):
+                        self._tap(max(300, tag.x - 190), tag.y + 115, 1.0)
+                        for _ in range(6):
+                            if self._text("空想迷域"):
+                                raise SkipTask("空想迷域不属于本次每日副本流程")
+                            labels = stage_labels(self._screen())
+                            if any(re.fullmatch(r"(?:\d+-\d+|BONUS)", h.text.strip(), re.I)
+                                   for h in labels):
+                                return
+                            self.sleep(0.6)
+                        self._home()
+                        raise RuntimeError("点击活动后未确认日常关卡地图，已返回首页")
+                signature = tuple((h.text, round(h.y / 30)) for h in hits if h.x >= 925)
+                if signature and signature == previous:
+                    break
+                previous = signature
+                if attempt < 8:
+                    self._swipe(1290, start, 1290, end, 650, 0.8)
         raise SkipTask("未找到难度 B 且仍有剩余时间的活动")
 
     def _stage(self, name: str) -> None:
@@ -987,6 +1172,8 @@ def run_game_flow(runner: Any, step: dict[str, Any]) -> dict[str, Any] | None:
     mapping = {
         "enter_game": flows.enter_game,
         "claim_login_rewards": flows.claim_login_rewards,
+        "claim_mail": flows.claim_mail,
+        "claim_guild_daily": flows.claim_guild_daily,
         "refresh_resonance": flows.refresh_resonance,
         "free_gift": flows.free_gift,
         "quick_battle": flows.quick_battle,

@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .adb import AdbDevice
-from .config import ConfigError, load_config, save_config, validate_config
+from .config import ConfigError, load_config, save_config, validate_config, upgrade_legacy_mail, upgrade_guild_daily
 from .runner import TaskRunner
 from .vision import crop_template, template_path
 from .mail_credentials import protect_secret
@@ -36,6 +36,8 @@ def config_revision(path: Path) -> str:
 def config_snapshot(path: Path) -> dict:
     raw = path.read_bytes()
     data = json.loads(raw.decode("utf-8"))
+    upgrade_legacy_mail(data)
+    upgrade_guild_daily(data)
     validate_config(data)
     email = data.get('notifications', {}).get('email', {})
     email['has_authorization_code'] = bool(email.pop('authorization_code_encrypted', ''))
