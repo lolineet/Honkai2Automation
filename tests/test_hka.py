@@ -460,6 +460,9 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_skill_modes_do_not_override_movement_mode(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = lambda _: None
+        flow.device = Mock(package='game')
+        flow.device.foreground_package.return_value = 'game'
         flow._check_cancel = lambda: None
         flow._hits = lambda *args, **kwargs: []
         flow._tap = lambda *args, **kwargs: None
@@ -505,6 +508,9 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_failed_result_is_not_recorded_as_a_win(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = lambda _: None
+        flow.device = Mock(package='game')
+        flow.device.foreground_package.return_value = 'game'
         flow._check_cancel = lambda: None
         flow._hits = lambda *args, **kwargs: [TextHit("战斗结算", 1, 700, 145, 120, 25),
                                                TextHit("挑战失败", 1, 900, 300, 120, 25)]

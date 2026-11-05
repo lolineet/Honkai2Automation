@@ -18,6 +18,7 @@ from .runner import TaskRunner
 from .vision import crop_template, template_path
 from .mail_credentials import protect_secret
 from .notify import email_options, send_email
+from .combat import upgrade_combat_controls
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -39,6 +40,7 @@ def config_snapshot(path: Path) -> dict:
     upgrade_legacy_mail(data)
     upgrade_guild_daily(data)
     validate_config(data)
+    upgrade_combat_controls(data)
     email = data.get('notifications', {}).get('email', {})
     email['has_authorization_code'] = bool(email.pop('authorization_code_encrypted', ''))
     email.pop('authorization_code', None)

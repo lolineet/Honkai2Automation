@@ -259,13 +259,31 @@ class AdbDevice:
             return image.size
 
     def tap(self, x: int, y: int) -> None:
-        self._run("shell", "input", "tap", str(x), str(y))
+        self._input("点按", "tap", str(x), str(y))
+
+    def foreground_package(self) -> str | None:
+        output = self._run("shell", "dumpsys", "activity", "activities")
+        match = re.search(r"(?:topResumedActivity|mResumedActivity|ResumedActivity)[:=]\s*ActivityRecord\{[^\n]*?\bu\d+\s+([\w.]+)/", output)
+        return match.group(1) if match else None
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 400) -> None:
-        self._run("shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms))
+        self._input("滑动/长按", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms))
 
     def key(self, code: int) -> None:
-        self._run("shell", "input", "keyevent", str(code))
+        self._input("按键", "keyevent", str(code))
+
+    def _input(self, action: str, *args: str) -> None:
+        try:
+            self._run("shell", "input", *args)
+        except AdbError as exc:
+            if "INJECT_EVENTS" not in str(exc):
+                raise
+            # Never replay an input that may already have partially executed.
+            raise AdbError(
+                f"模拟器拒绝{action}输入（INJECT_EVENTS），本轮已停止。"
+                "请重启模拟器后重试；如果仍失败，请检查模拟器的 ADB 输入授权。"
+                f"原始错误: {exc}"
+            ) from exc
 
     def launch_game(self) -> None:
         intent = ("-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER")

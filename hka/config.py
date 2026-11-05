@@ -7,6 +7,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .combat import upgrade_combat_controls
+
 
 class ConfigError(ValueError):
     pass
@@ -25,6 +27,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
     upgrade_legacy_mail(data)
     upgrade_guild_daily(data)
     validate_config(data)
+    upgrade_combat_controls(data)
     return data
 
 
@@ -60,6 +63,8 @@ def upgrade_guild_daily(data: Any) -> None:
 
 def save_config(path: str | Path, data: dict[str, Any]) -> None:
     validate_config(data)
+    data = copy.deepcopy(data)
+    upgrade_combat_controls(data)
     path = Path(path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -210,7 +215,10 @@ def validate_steps(steps: Any, location: str) -> None:
                 skills = combat.get("skills", [])
                 if not isinstance(skills, list) or len(skills) > 3:
                     raise ConfigError(f"{where}.options.combat.skills 最多包含三个按键")
-                controls = skills + ([combat["shoot"]] if "shoot" in combat else [])
+                weapons = combat.get("weapons", {})
+                if not isinstance(weapons, dict) or set(weapons) - {"A", "B", "C"}:
+                    raise ConfigError(f"{where}.options.combat.weapons 只能包含装备槽 A/B/C")
+                controls = skills + list(weapons.values()) + ([combat["shoot"]] if "shoot" in combat else [])
                 for control in controls:
                     if not isinstance(control, dict) or control.get("mode", "off") not in {"off", "tap", "hold", "once"}:
                         raise ConfigError(f"{where} 战斗按键模式无效")

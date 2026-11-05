@@ -17,6 +17,7 @@ from .ocr import TextHit, double_stamina, find_text, integer_after, read_stamina
 from .runner import SkipTask
 from .vision import find_image
 from .inventory import check_equipment_capacity
+from .combat import weapon_controls
 
 
 class GameFlows:
@@ -88,6 +89,16 @@ class GameFlows:
         self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2)
         return True
 
+    def _dismiss_combat_result(self, hits: list[TextHit]) -> bool:
+        title = find_text([h for h in hits if 680 <= h.x <= 1000 and 120 <= h.y <= 200], "战斗结算")
+        buttons = [h for h in hits if 700 <= h.x <= 1170 and 730 <= h.y <= 805]
+        confirm = find_text(buttons, "确定")
+        if not title or not find_text(buttons, "再次挑战") or not confirm:
+            return False
+        self._tap(confirm.x + confirm.width // 2, confirm.y + confirm.height // 2, 1.0)
+        self.log("已确认战斗结算，返回关卡地图")
+        return True
+
     def _dismiss_navigation_notice(self, hits: list[TextHit]) -> bool:
         rewards = find_text(hits, "已领取以下奖励")
         if rewards and rewards.y < 150:
@@ -130,7 +141,7 @@ class GameFlows:
                     token in words for token in ("水晶", "钻石", "双倍体力", "将消耗")):
                 self._cancel_exchange(modal, "返回首页前关闭体力兑换提示")
                 continue
-            if self._dismiss_navigation_notice(hits) or self._dismiss_navigation_card():
+            if self._dismiss_combat_result(hits) or self._dismiss_navigation_notice(hits) or self._dismiss_navigation_card():
                 continue
             screenshot = self._screen()
             hit = next((hit for hit in hits if "首页" in hit.text and
@@ -901,35 +912,33 @@ class GameFlows:
 
     def _combat(self, options: dict[str, Any]) -> None:
         combat = options.get("combat", {})
-        skills = combat.get("skills", [])
-        shoot = combat.get("shoot", {"x": 1480, "y": 565, "mode": "tap"})
+        weapons = weapon_controls(combat)
         max_cycles = int(combat.get("max_cycles", 24))
         movement_ms = int(combat.get("movement_ms", 6500))
         hold_ms = int(combat.get("hold_ms", 900))
         combat_mode = combat.get("mode", "move_shoot")
-        if shoot.get("mode") == "once":
-            self._tap(int(shoot["x"]), int(shoot["y"]), 0.1)
-        for skill in skills:
-            if skill.get("mode") == "once":
-                self._tap(int(skill["x"]), int(skill["y"]), 0.1)
-        for _ in range(max_cycles):
+        self.log("战斗按键：" + "，".join(f"{slot}={weapon['mode']}" for slot, weapon in weapons.items()))
+        for cycle in range(max_cycles):
             self._check_cancel()
-            hits = self._hits((680, 80, 1370, 865))
+            if self.device.foreground_package() != self.device.package:
+                raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
+            hits = self._hits()
             if find_text(hits, "失败"):
                 raise RuntimeError("体力本战斗失败")
             if find_text(hits, "战斗结算"):
-                self._click("确定", (900, 710, 1170, 815))
+                if not self._dismiss_combat_result(hits):
+                    raise RuntimeError("已发现战斗结算，但未完整确认结算按钮")
                 return
-            if shoot.get("mode") == "tap":
-                self._tap(int(shoot["x"]), int(shoot["y"]), 0.1)
-            elif shoot.get("mode") == "hold":
-                self._swipe(int(shoot["x"]), int(shoot["y"]), int(shoot["x"]), int(shoot["y"]), hold_ms, 0.1)
-            for skill in skills:
-                mode = skill.get("mode", "off")
-                if mode == "tap":
-                    self._tap(int(skill["x"]), int(skill["y"]), 0.1)
+            if self.device.foreground_package() != self.device.package:
+                raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
+            for slot, weapon in weapons.items():
+                mode = weapon.get("mode", "off")
+                if mode == "tap" or (mode == "once" and cycle == 0):
+                    self._tap(int(weapon["x"]), int(weapon["y"]), 0.1)
+                    self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 点按已发送（{mode}）")
                 elif mode == "hold":
-                    self._swipe(int(skill["x"]), int(skill["y"]), int(skill["x"]), int(skill["y"]), hold_ms, 0.1)
+                    self._swipe(int(weapon["x"]), int(weapon["y"]), int(weapon["x"]), int(weapon["y"]), hold_ms, 0.1)
+                    self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 长按 {hold_ms} 毫秒已发送")
             if combat_mode == "move_shoot":
                 self._swipe(210, 690, 345, 690, movement_ms, 0.5)
             else:
