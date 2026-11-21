@@ -12,6 +12,7 @@ def hit(text, y=400):
 class RiftNavigationTests(unittest.TestCase):
     def make_flow(self, screens):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._battle_picker = Mock()
         flow._click = Mock()
         flow._hits = Mock(side_effect=screens)
@@ -54,24 +55,24 @@ class RiftNavigationTests(unittest.TestCase):
         flow._tap.assert_called_once_with(1090, 485, 1.0)
 
     def test_unconfirmed_map_stops_without_more_navigation(self):
-        flow = self.make_flow([[hit("多元裂缝")]] + [[hit("其他活动")]] * 6)
+        flow = self.make_flow(([[hit("多元裂缝")]] + [[hit("其他活动")]] * 6) * 3)
         with self.assertRaisesRegex(RuntimeError, "未确认关卡地图"):
             flow._rift()
-        flow._tap.assert_called_once()
+        self.assertEqual(flow._tap.call_count, 3)
         flow._swipe.assert_not_called()
 
     def test_missing_entry_stops_at_both_boundaries(self):
-        flow = self.make_flow([[hit("精神羁绊")]] * 4)
+        flow = self.make_flow([[hit("精神羁绊")]] * 12)
         with self.assertRaisesRegex(RuntimeError, "双向查找"):
             flow._rift()
-        self.assertEqual(flow._swipe.call_count, 2)
+        self.assertEqual(flow._swipe.call_count, 6)
         flow._tap.assert_not_called()
 
     def test_blank_ocr_has_a_finite_search_limit(self):
-        flow = self.make_flow([[]] * 18)
+        flow = self.make_flow([[]] * 54)
         with self.assertRaisesRegex(RuntimeError, "双向查找"):
             flow._rift()
-        self.assertEqual(flow._swipe.call_count, 16)
+        self.assertEqual(flow._swipe.call_count, 48)
         flow._tap.assert_not_called()
 
 

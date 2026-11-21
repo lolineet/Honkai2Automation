@@ -6,6 +6,7 @@ from PIL import Image
 
 from hka.game_flows import GameFlows
 from hka.ocr import TextHit, double_stamina, read_stamina_hud, stamina
+from hka.runner import SkipTask
 
 
 def hud(value, *, doubled=False):
@@ -46,10 +47,38 @@ class StaminaHudTests(unittest.TestCase):
                 hud('270/204'), hud('25/110', doubled=True), hud('25/110', doubled=True)]):
             self.assertEqual(self.flow()._double_stamina(), 25)
 
+    def test_extra_bonus_skips_when_the_hud_only_shows_ordinary_stamina(self):
+        flow = self.flow()
+        flow._home = Mock()
+        flow._activity = Mock()
+        flow._run_stage = Mock()
+        frames = [hud('87/204')] * 10 + [hud('88/204')] * 10
+        with patch('hka.game_flows.read_stamina_hud', side_effect=frames * 3):
+            with self.assertRaisesRegex(SkipTask, '顶部持续只显示普通体力'):
+                flow.bonus_double_stamina({})
+        self.assertEqual(flow._screen.call_count, 20)
+        flow._activity.assert_not_called()
+        flow._run_stage.assert_not_called()
+
+    def test_extra_bonus_still_requires_confirmation_when_double_stamina_appears(self):
+        flow = self.flow()
+        flow._home = Mock()
+        flow._activity = Mock()
+        frames = [hud('88/204')] * 19 + [hud('54/110', doubled=True)]
+        with patch('hka.game_flows.read_stamina_hud', side_effect=frames * 3):
+            with self.assertRaisesRegex(RuntimeError, '无法连续确认双倍体力'):
+                flow.bonus_double_stamina({})
+        flow._activity.assert_not_called()
+
+    def test_other_double_stamina_reads_still_fail_when_only_ordinary_stamina_shows(self):
+        with patch('hka.game_flows.read_stamina_hud', return_value=hud('88/204')):
+            with self.assertRaisesRegex(RuntimeError, '无法连续确认双倍体力'):
+                self.flow()._double_stamina()
+
     def test_unstable_or_unreadable_value_fails_instead_of_guessing(self):
         for frames in ([hud('70/204'), hud('270/204')] * 10,
                        [hud('270/204'), []] * 10):
-            with patch('hka.game_flows.read_stamina_hud', side_effect=frames):
+            with patch('hka.game_flows.read_stamina_hud', side_effect=frames * 3):
                 with self.assertRaisesRegex(RuntimeError, '无法连续确认普通体力'):
                     self.flow()._stamina()
 

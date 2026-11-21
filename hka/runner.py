@@ -11,6 +11,7 @@ from .adb import AdbDevice
 from .cancellation import Cancelled
 from .config import execution_day, schedule_matches
 from .notify import send_notifications
+from .retry import RetryExhausted, retry_call
 from .inventory import EquipmentFull
 from .vision import find_image
 
@@ -106,22 +107,22 @@ class TaskRunner:
             return result
         self.run_dir.mkdir(parents=True, exist_ok=True)
         started = False
-        try:
+        def connect_device():
+            nonlocal started
             try:
-                self._check_cancel()
                 self.device.connect()
-            except Cancelled:
+            except RuntimeError:
+                if not started and self.device.emulator_path:
+                    self.log("ADB 尚未连接，正在启动模拟器")
+                    self.device.start_emulator()
+                    started = True
                 raise
-            except Exception:
-                if not self.device.emulator_path:
-                    raise
-                self.log("ADB 尚未连接，正在启动模拟器")
-                self.device.start_emulator()
-                started = True
-                self.device.wait_until_ready()
+        try:
+            self._check_cancel()
+            retry_call(connect_device, sleep=self.sleep, log=self.log, label="连接模拟器")
             if not self.device.installed():
                 raise RuntimeError(f"游戏未安装: {self.device.package}")
-            self._screen_size = self.device.size()
+            self._screen_size = retry_call(self.device.size, sleep=self.sleep, log=self.log, label="读取模拟器画面")
             self.log(f"已连接 {self.device.serial}，画面 {self._screen_size[0]}×{self._screen_size[1]}")
             for index, task in enumerate(tasks):
                 if self.cancel.is_set():
@@ -149,6 +150,8 @@ class TaskRunner:
                         self.log(f'错误截图失败: {screenshot_error}')
                 except Exception as exc:
                     status, message = "failed", str(exc)
+                    if isinstance(exc, RetryExhausted):
+                        result['attention_required'] = {'code': 'retry_exhausted', 'message': message}
                     try:
                         self._save_screenshot(task["id"] + "_error")
                     except Exception as screenshot_error:
@@ -200,8 +203,12 @@ class TaskRunner:
             lines.append(f"连接错误: {result['setup_error']}")
         lines += [f"{item['name']}: {item['status']} {item['message']}" for item in result["tasks"]]
         if not result.get("cancelled"):
-            title = '装备仓库已满，需要处理' if result.get('attention_required') else "崩坏2任务执行" + ("失败" if failed else "完成")
-            result["notification_errors"] = send_notifications(self.config, success=not failed, title=title, body="\n".join(lines))
+            title = ('装备仓库已满，需要处理' if result.get('attention_required', {}).get('code') == 'equipment_full'
+                     else "崩坏2任务执行" + ("失败" if failed else "完成"))
+            notify_config = self.config
+            if failed:
+                notify_config = {**self.config, "notifications": {**self.config.get("notifications", {}), "on_error": True}}
+            result["notification_errors"] = send_notifications(notify_config, success=not failed, title=title, body="\n".join(lines))
         for error in result["notification_errors"]:
             self.log(f"通知发送失败: {error}")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -214,7 +221,7 @@ class TaskRunner:
                 raise Cancelled()
             kind = step["type"]
             if kind == "launch_game":
-                self.device.launch_game()
+                retry_call(self.device.launch_game, sleep=self.sleep, log=self.log, label="启动游戏")
                 self.sleep(float(step.get("wait", 15)))
             elif kind == "sleep":
                 self.sleep(float(step["seconds"]))
@@ -246,7 +253,7 @@ class TaskRunner:
                     if behavior == "break_repeat":
                         raise BreakRepeat()
                     if behavior != "continue":
-                        raise RuntimeError(f"未找到图像 {step['image']}")
+                        raise RetryExhausted(f"尝试 3 次仍未找到图像 {step['image']}，停止本轮运行")
                 elif kind == "tap_image":
                     x, y, score = found
                     width, height = self._size()
@@ -264,14 +271,20 @@ class TaskRunner:
 
     def _wait_image(self, step: dict[str, Any]) -> tuple[int, int, float] | None:
         timeout = float(step.get("timeout", self.config.get("runtime", {}).get("image_timeout", 12)))
-        deadline = time.monotonic() + timeout
-        while True:
-            if self.cancel.is_set():
-                raise Cancelled()
-            found = find_image(self.device.screen(), self.template_dir, step)
-            if found or time.monotonic() >= deadline:
-                return found
-            self.sleep(min(0.6, max(0, deadline - time.monotonic())))
+        for attempt in range(1, 4):
+            deadline = time.monotonic() + timeout
+            while True:
+                self._check_cancel()
+                found = find_image(self.device.screen(), self.template_dir, step)
+                if found:
+                    return found
+                if time.monotonic() >= deadline:
+                    break
+                self.sleep(min(0.6, max(0, deadline - time.monotonic())))
+            self.log(f"等待图像 {step['image']}：第 {attempt}/3 次未找到")
+            if attempt < 3:
+                self.sleep(1.5)
+        return None
 
     def _size(self) -> tuple[int, int]:
         if self._screen_size is None:

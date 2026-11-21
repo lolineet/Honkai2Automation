@@ -1,7 +1,8 @@
+import subprocess
 import unittest
 from unittest.mock import patch
 
-from hka.adb import AdbDevice, AdbError
+from hka.adb import AdbDevice, AdbError, AdbTransportError
 from hka.cancellation import Cancelled
 
 
@@ -31,6 +32,13 @@ class InputTests(unittest.TestCase):
         with patch.object(self.device, '_run') as run:
             self.device.swipe(210, 690, 345, 690, 6500)
         run.assert_called_once_with('shell', 'input', 'swipe', '210', '690', '345', '690', '6500')
+
+    def test_closed_transport_is_reported_without_replaying_input(self):
+        result = subprocess.CompletedProcess([], 1, b'', b'error: closed\r\n')
+        with patch.object(self.device, '_execute', return_value=result) as execute:
+            with self.assertRaisesRegex(AdbTransportError, 'error: closed'):
+                self.device.swipe(210, 690, 345, 690, 6500)
+        execute.assert_called_once()
 
     def test_foreground_package_comes_from_resumed_activity(self):
         for text, expected in [

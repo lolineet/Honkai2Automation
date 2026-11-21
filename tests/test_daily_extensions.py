@@ -23,6 +23,7 @@ def hit(text, x=600, y=350):
 class DailyExtensions(unittest.TestCase):
     def test_second_page_first_clear_flips_forward_before_entering_stage(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._stage_detail_visible = Mock(return_value=True)
         flow._screen = Mock(return_value=b'frame')
         flow._hits = Mock(return_value=[hit('1/2', 760, 810)])
@@ -35,6 +36,7 @@ class DailyExtensions(unittest.TestCase):
 
     def test_first_page_stage_flips_back_from_second_page(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._stage_detail_visible = Mock(return_value=True)
         flow._screen = Mock(return_value=b'frame')
         flow._hits = Mock(return_value=[hit('2/2', 760, 810)])
@@ -46,6 +48,7 @@ class DailyExtensions(unittest.TestCase):
 
     def test_stage_click_during_settlement_loading_is_retried(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._screen = Mock(return_value=b'frame'); flow._tap = Mock(); flow.sleep = Mock()
         flow._stage_detail_visible = Mock(side_effect=[False, True])
         with patch('hka.game_flows.stage_labels', return_value=[hit('2-3', 1270, 480)]):
@@ -98,6 +101,7 @@ class DailyExtensions(unittest.TestCase):
 
     def test_second_page_chain_rechecks_after_every_newly_cleared_stage(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._activity = Mock(); flow.log = Mock()
         cleared = []
         flow._first_clear_stage = lambda name, options: cleared.append(name)
@@ -159,6 +163,21 @@ class DailyExtensions(unittest.TestCase):
         self.assertEqual(flow._double_exchange_details, {'double_spent': 95, 'restored_stamina': 190})
         self.assertEqual(flow._exchange_snapshot.call_count, 3)
 
+    def test_full_exchange_confirms_ordinary_gain_when_double_hud_disappears(self):
+        safe = (self.safe_dialog(70, 140), False)
+        for after in (187, 186):
+            with self.subTest(after=after):
+                flow = self.exchange([safe, safe, ([], False)])
+                flow._double_stamina = Mock(side_effect=[70, RuntimeError('双倍体力不再显示')])
+                flow._stamina = Mock(side_effect=[47] + [after] * 3)
+                if after == 187:
+                    flow._exchange_double_stamina()
+                    self.assertEqual(flow._double_exchange_details, {'double_spent': 70, 'restored_stamina': 140})
+                else:
+                    with self.assertRaisesRegex(RuntimeError, '变化与预期不符'):
+                        flow._exchange_double_stamina()
+                flow._double_stamina.assert_called_once()
+
     def test_paid_or_changed_exchange_is_cancelled_without_confirmation(self):
         safe = (self.safe_dialog(), False)
         for snapshots in ([ (self.safe_dialog(), True) ],
@@ -187,6 +206,7 @@ class DailyExtensions(unittest.TestCase):
 
     def test_cancelling_double_prompt_also_closes_the_following_premium_prompt(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._tap = Mock(); flow.log = Mock()
         flow._exchange_snapshot = Mock(side_effect=[
             ([hit('主人可花费60水晶，补充205体力'), hit('取消', 883, 544)], True), ([], False)])
@@ -201,12 +221,15 @@ class DailyExtensions(unittest.TestCase):
         frame.paste(icon, (1160, 415))
         stream = io.BytesIO(); frame.save(stream, format='PNG')
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._screen = Mock(return_value=stream.getvalue())
         with patch('hka.game_flows.read_text', return_value=[]):
             self.assertTrue(flow._exchange_snapshot()[1])
 
     def test_extra_bonus_is_exactly_one_even_with_max_runs_in_options(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._home = Mock(); flow._double_stamina = Mock(return_value=50)
         flow._activity = Mock(); flow._run_stage = Mock(); flow._stamina = Mock(return_value=100)
         flow.log = Mock()
@@ -218,8 +241,29 @@ class DailyExtensions(unittest.TestCase):
             flow.bonus_double_stamina(options)
         flow._run_stage.assert_not_called()
 
+    def test_resume_confirmed_exchange_checks_cost_without_exchanging_again(self):
+        for balance in (187, 49):
+            with self.subTest(balance=balance):
+                flow = GameFlows.__new__(GameFlows)
+                flow._stage = Mock(); flow._text = Mock(return_value=True)
+                flow._hits = Mock(return_value=[hit('消耗体力50')]); flow._stamina = Mock(return_value=balance)
+                flow._double_stamina = Mock(); flow._exchange_double_stamina = Mock()
+                flow._click = Mock(); flow._tap = Mock(); flow._combat = Mock()
+                flow.sleep = Mock(); flow.log = Mock()
+                if balance >= 50:
+                    flow._run_stage('BONUS', {'use_double_ticket': True}, double_extra=True,
+                                    double_already_exchanged=True)
+                    flow._combat.assert_called_once()
+                else:
+                    with self.assertRaises(SkipTask):
+                        flow._run_stage('BONUS', {}, double_extra=True, double_already_exchanged=True)
+                    flow._click.assert_not_called()
+                flow._double_stamina.assert_not_called()
+                flow._exchange_double_stamina.assert_not_called()
+
     def axis(self, counts):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._open_quick_detail = Mock()
         flow._quick_allowance = Mock(side_effect=counts)
         flow._execute_quick = Mock(return_value=3)
@@ -246,6 +290,8 @@ class DailyExtensions(unittest.TestCase):
 
     def test_axis_nonzero_stamina_cost_is_never_confirmed(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._click = Mock()
         flow._hits = Mock(return_value=[hit('快捷战斗'), hit('100', 650, 400),
             hit('99', 850, 400), hit('3', 720, 490)])
@@ -255,6 +301,7 @@ class DailyExtensions(unittest.TestCase):
 
     def test_axis_exhausted_page_with_paid_replay_is_never_entered(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._hits = Mock(return_value=[hit('进度: 阶段二'), hit('已参与次数:3/3'),
             hit('消耗体力35'), hit('选择助战好友')])
         flow.log = Mock()
@@ -264,6 +311,8 @@ class DailyExtensions(unittest.TestCase):
 
     def test_axis_reduces_the_dialog_count_to_remaining_free_attempts(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         def dialog(count):
             return [hit('快捷战斗'), hit('100', 650, 400), hit('100', 850, 400), hit(str(count), 720, 490)]
         flow._hits = Mock(side_effect=[dialog(3), dialog(2), dialog(1)])
@@ -279,12 +328,14 @@ class DailyExtensions(unittest.TestCase):
 
     def test_weekly_only_claims_rewards_after_confirming_its_page(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._tasks = Mock()
         flow._click = Mock()
         flow._hits = Mock(return_value=[hit('每周', 312, 209), hit('存在感', 395, 252)])
         flow._claim_task_rewards = Mock()
         flow.claim_weekly({})
-        flow._click.assert_called_once_with('每周任务', (0, 430, 180, 525))
+        flow._click.assert_called_once_with('每周任务', (0, 180, 180, 700))
         flow._claim_task_rewards.assert_called_once_with('每周')
         flow._hits.return_value = []
         flow._claim_task_rewards.reset_mock()

@@ -267,6 +267,7 @@ class NotificationTests(unittest.TestCase):
 class GameSafetyTests(unittest.TestCase):
     def test_navigation_closes_recognized_cards_and_announcements(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow.log = lambda _: None
         taps = []
         flow._tap = lambda *args: taps.append(args)
@@ -285,6 +286,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_navigation_closes_only_the_delivery_notice(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow.log = lambda _: None
         taps = []
         flow._tap = lambda *args: taps.append(args)
@@ -300,6 +302,8 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_battle_picker_retries_when_the_first_click_stays_on_home(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._home = lambda: None
         flow._screen = lambda: b'test frame'
         flow._dismiss_navigation_notice = lambda _: False
@@ -334,6 +338,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_bonus_repeats_until_regular_stamina_is_below_100(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._activity = lambda: None
         values = iter([300, 250, 200, 150, 100, 50])
         flow._stamina = lambda: next(values)
@@ -348,6 +353,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_bonus_single_run_limit_is_reported_explicitly(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._activity = lambda: None
         flow._stamina = lambda: 300
         stages = []
@@ -372,6 +378,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_axis_unknown_page_with_a_free_label_is_not_a_detail(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._hits = lambda *args, **kwargs: [TextHit("今日免费6/6", 1, 778, 737, 157, 33)]
         flow.sleep = lambda _: None
         with self.assertRaisesRegex(RuntimeError, "未确认.*详情页"):
@@ -379,6 +386,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_daily_reward_recovers_home_before_opening_the_task_menu(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         actions = []
         flow._home = lambda: actions.append("home")
         flow._tap = lambda *args, **kwargs: actions.append(("tap", args))
@@ -391,6 +399,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_quick_battle_missing_detail_is_failure_not_exhaustion(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._hits = lambda *args, **kwargs: [TextHit("使魔的爱", 1, 730, 488, 163, 51)]
         flow.sleep = lambda _: None
         with self.assertRaisesRegex(RuntimeError, "未确认.*详情页"):
@@ -416,6 +425,8 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_refresh_with_zero_free_uses_no_refresh_tap(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._shop = lambda: None
         flow._click = lambda *args, **kwargs: True
         flow._hits = lambda *args, **kwargs: [TextHit("剩余次数 0次", 1, 1100, 170, 100, 22)]
@@ -427,6 +438,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_partly_hidden_gift_scrolls_before_checking_price(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._shop = lambda: None
         flow._click = lambda *args, **kwargs: True
         screens = iter([
@@ -448,6 +460,8 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_paid_gift_has_no_purchase_taps(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._shop = lambda: None
         flow._click = lambda *args, **kwargs: True
         flow._hits = lambda *args, **kwargs: [TextHit("零时馈礼", 1, 1120, 260, 100, 25),
@@ -472,10 +486,11 @@ class GameSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "战斗超时"):
             flow._combat({"combat": {"mode": "move_shoot", "max_cycles": 1,
                 "skills": [{"x": 1000, "y": 700, "mode": "off"}]}})
-        self.assertEqual(swipes, [(210, 690, 345, 690, 6500, 0.5)])
+        self.assertEqual(swipes, [(210, 690, 345, 690, 6500, 0.5)] * 3)
 
     def test_unknown_battle_screen_never_receives_reset_tap(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._home = lambda: None
         flow._hits = lambda *args, **kwargs: []
         buffer = io.BytesIO()
@@ -486,10 +501,12 @@ class GameSafetyTests(unittest.TestCase):
         flow._tap = lambda *args, **kwargs: taps.append(args)
         with self.assertRaises(RuntimeError):
             flow._battle_picker()
-        self.assertEqual(taps, [(955, 70, 1.5)])
+        self.assertEqual(taps, [(955, 70, 1.5)] * 3)
 
     def test_activity_uses_hours_remaining_and_excludes_maze(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._battle_picker = Mock()
         flow._click = Mock()
         flow._hits = lambda *args, **kwargs: [
@@ -508,6 +525,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_failed_result_is_not_recorded_as_a_win(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow.log = lambda _: None
         flow.device = Mock(package='game')
         flow.device.foreground_package.return_value = 'game'
@@ -522,6 +540,7 @@ class GameSafetyTests(unittest.TestCase):
 
     def test_partial_first_clear_resumes_unfinished_stages(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
         flow._optional_stage_visible = lambda _: False
         flow._activity = lambda: None
         flow._stage = lambda _: None

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, call
 
+from hka.adb import AdbError, AdbTransportError
 from hka.combat import weapon_controls, upgrade_combat_controls
 from hka.config import ConfigError, load_config, validate_config
 from hka.defaults import DEFAULT_CONFIG
@@ -43,7 +44,7 @@ class CombatControlsTests(unittest.TestCase):
     def test_no_battle_input_when_game_loses_foreground(self):
         for states in [['app.lawnchair'], ['game', 'app.lawnchair'], [None]]:
             with self.subTest(states=states):
-                flow = self.flow([[]])
+                flow = self.flow([[], [], []])
                 flow.device.foreground_package.side_effect = states
                 with self.assertRaisesRegex(RuntimeError, '已停止战斗输入'):
                     flow._combat({})
@@ -65,7 +66,7 @@ class CombatControlsTests(unittest.TestCase):
     def test_explicit_weapons_never_fall_back_to_legacy_shoot(self):
         combat = self.legacy(['tap', 'hold', 'once'])
         combat['weapons'] = {}
-        flow = self.flow([[]])
+        flow = self.flow([[], [], []])
         with self.assertRaisesRegex(RuntimeError, '战斗超时'):
             flow._combat({'combat': {**combat, 'mode': 'buttons', 'max_cycles': 1}})
         flow._tap.assert_not_called()
@@ -84,6 +85,42 @@ class CombatControlsTests(unittest.TestCase):
                 self.assertEqual(holds, [call(1480, 565, 1480, 565, 750, .1)] * 2)
                 moves = [c for c in flow._swipe.call_args_list if c.args[0] == 210]
                 self.assertEqual(len(moves), 2 if mode == 'move_shoot' else 0)
+
+    def test_transport_loss_resumes_existing_battle_without_replaying_once(self):
+        battle = [TextHit('HP', 1, 11, 11, 72, 54), TextHit('6950/7140', 1, 261, 25, 144, 27)]
+        result = [TextHit('战斗结算', 1, 700, 145, 120, 25)]
+        flow = self.flow([battle, battle, result])
+        flow._swipe.side_effect = [AdbTransportError('error: closed'), None]
+        weapons = weapon_controls(self.legacy(['once', 'tap', 'off']))
+        flow._combat({'combat': {'weapons': weapons}})
+        flow.device.connect.assert_called_once()
+        self.assertEqual(flow._tap.call_args_list, [call(1255, 790, .1),
+                                                   call(1480, 790, .1), call(1480, 790, .1)])
+        flow._dismiss_combat_result.assert_called_once_with(result)
+
+    def test_reconnected_game_without_combat_hud_receives_no_further_input(self):
+        flow = self.flow([[]] + [[TextHit('首页', 1, 800, 90, 60, 28)]] * 4)
+        flow._swipe.side_effect = AdbTransportError('error: closed')
+        with self.assertRaisesRegex(RuntimeError, '重连后未确认战斗画面'):
+            flow._combat({})
+        flow.device.connect.assert_called_once()
+        self.assertEqual(flow._swipe.call_count, 1)
+
+    def test_transport_loss_can_recover_directly_to_result(self):
+        result = [TextHit('战斗结算', 1, 700, 145, 120, 25)]
+        flow = self.flow([[], result])
+        flow._swipe.side_effect = AdbTransportError('error: closed')
+        flow._combat({})
+        flow.device.connect.assert_called_once()
+        flow._dismiss_combat_result.assert_called_once_with(result)
+        self.assertEqual(flow._swipe.call_count, 1)
+
+    def test_other_adb_errors_are_not_retried(self):
+        flow = self.flow([[], [], []])
+        flow._swipe.side_effect = AdbError('INJECT_EVENTS')
+        with self.assertRaisesRegex(AdbError, 'INJECT_EVENTS'):
+            flow._combat({})
+        flow.device.connect.assert_not_called()
 
     def test_migration_round_trip_and_api_preserve_all_combat_steps(self):
         data = copy.deepcopy(DEFAULT_CONFIG)
@@ -111,10 +148,11 @@ class CombatControlsTests(unittest.TestCase):
     def test_once_uses_slot_order_and_waits_for_battle_screen_check(self):
         combat = {'weapons': weapon_controls(self.legacy(['tap', 'off', 'once'])),
                   'mode': 'buttons', 'max_cycles': 1}
-        flow = self.flow([[]])
+        flow = self.flow([[], [], []])
         with self.assertRaisesRegex(RuntimeError, '战斗超时'):
             flow._combat({'combat': combat})
-        self.assertEqual(flow._tap.call_args_list, [call(1255, 790, .1), call(1480, 565, .1)])
+        self.assertEqual(flow._tap.call_args_list, [call(1255, 790, .1), call(1480, 565, .1),
+                                                   call(1255, 790, .1), call(1255, 790, .1)])
         flow = self.flow([[TextHit('挑战失败', 1, 900, 300, 120, 25)]])
         with self.assertRaisesRegex(RuntimeError, '战斗失败'):
             flow._combat({'combat': combat})
@@ -135,11 +173,16 @@ class CombatControlsTests(unittest.TestCase):
         title = TextHit('战斗结算', 1, 729, 142, 112, 41)
         again = TextHit('再次挑战', 1, 738, 750, 123, 39)
         confirm = TextHit('确定', 1, 1012, 750, 68, 39)
+        duration = TextHit('挑战时间', 1, 727, 205, 110, 35)
+        score = TextHit('本次积分', 1, 962, 252, 110, 34)
         for hits, expected in [([title, again, confirm], True),
+                               ([title, duration, score, confirm], True),
+                               ([title, duration, confirm], False),
                                ([confirm], False), ([title, confirm], False),
                                ([title, again, TextHit('确定', 1, 600, 400, 68, 39)], False)]:
             with self.subTest(hits=hits):
                 flow = GameFlows.__new__(GameFlows)
+                flow.sleep = Mock()
                 flow._tap = Mock()
                 flow.log = Mock()
                 self.assertEqual(flow._dismiss_combat_result(hits), expected)

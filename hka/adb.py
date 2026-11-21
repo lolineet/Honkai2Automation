@@ -15,6 +15,10 @@ class AdbError(RuntimeError):
     pass
 
 
+class AdbTransportError(AdbError):
+    pass
+
+
 def _background_options() -> dict:
     # pythonw otherwise gives each console helper its own visible window.
     return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -94,6 +98,8 @@ class AdbDevice:
             raise self._execution_error(exc) from exc
         if result.returncode:
             message = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+            if message in {"error: closed", "error: device offline", f"error: device '{self.serial}' not found"}:
+                raise AdbTransportError(f"ADB 返回错误: {message}")
             raise AdbError(f"ADB 返回错误: {message}")
         return result.stdout if binary else result.stdout.decode("utf-8", errors="replace").strip()
 

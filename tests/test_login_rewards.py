@@ -60,6 +60,22 @@ class LoginRewardsTests(unittest.TestCase):
             self.assertEqual(self.flow.claim_login_rewards({})['pages'], ['角色生日奖励'])
         self.runner.device.tap.assert_called_once_with(807, 568)
 
+    def test_birthday_reply_can_hide_title_and_date(self):
+        receipt = [hit('嗯，我会好好珍藏这一切。', 618, 273), hit('领取', 758, 555),
+                   hit('生日快乐', 1088, 647)]
+        with patch.object(self.flow, '_hits', return_value=receipt):
+            self.flow.enter_game({})
+        self.runner.device.tap.assert_not_called()
+        with patch.object(self.flow, '_hits', side_effect=[receipt, [], [], []]):
+            self.assertEqual(self.flow.claim_login_rewards({})['pages'], ['角色生日奖励'])
+        self.runner.device.tap.assert_called_once_with(808, 570)
+
+    def test_birthday_reply_needs_birthday_context(self):
+        hits = [hit('嗯，我会好好珍藏这一切。', 618, 273), hit('领取', 758, 555)]
+        with patch.object(self.flow, '_hits', return_value=hits):
+            self.assertEqual(self.flow.claim_login_rewards({})['claimed'], 0)
+        self.runner.device.tap.assert_not_called()
+
     def test_birthday_is_recognized_as_entered_game(self):
         with patch.object(self.flow, '_hits', return_value=birthday()):
             self.flow.enter_game({})
@@ -84,7 +100,7 @@ class LoginRewardsTests(unittest.TestCase):
         self.runner.device.tap.assert_called_once()
 
     def test_missing_birthday_claim_is_reported(self):
-        with patch.object(self.flow, '_hits', side_effect=[birthday(), [], [], []]):
+        with patch.object(self.flow, '_hits', side_effect=[birthday()] + [[]] * 9):
             with self.assertRaisesRegex(RuntimeError, '未确认生日奖励'):
                 self.flow.claim_login_rewards({})
 

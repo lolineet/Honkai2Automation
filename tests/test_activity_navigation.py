@@ -21,6 +21,7 @@ def card(y=270):
 class ActivityNavigationTests(unittest.TestCase):
     def make_flow(self, frames):
         flow = GameFlows.__new__(GameFlows)
+        flow.log = Mock()
         flow._battle_picker = Mock()
         flow._click = Mock()
         flow._hits = Mock(side_effect=frames)
@@ -50,11 +51,11 @@ class ActivityNavigationTests(unittest.TestCase):
 
     @patch("hka.game_flows.stage_labels", return_value=[])
     def test_wrong_chapter_returns_home_and_never_accepts_entry(self, _):
-        flow = self.make_flow([card()])
+        flow = self.make_flow([card()] * 3)
         with self.assertRaisesRegex(RuntimeError, "未确认日常关卡地图"):
             flow._activity()
-        flow._home.assert_called_once()
-        flow._tap.assert_called_once()
+        self.assertEqual(flow._home.call_count, 3)
+        self.assertEqual(flow._tap.call_count, 3)
 
     def test_missing_activity_stops_at_both_boundaries(self):
         flow = self.make_flow([[hit("多元裂缝")]] * 4)
@@ -87,7 +88,7 @@ class ChapterHomeTests(unittest.TestCase):
     def make_flow(self, with_icon):
         flow = GameFlows.__new__(GameFlows)
         flow._hits = Mock(side_effect=[[], [hit("首页", 788, 84)], [hit("首页", 788, 84)]]
-                          if with_icon else [[]] * 8)
+                          if with_icon else [[]] * 24)
         frame = Image.new("RGB", (1600, 900), "#eeeeee")
         if with_icon:
             with Image.open(Path(__file__).resolve().parents[1] / "hka/assets/navigation_home.png") as icon:
@@ -102,7 +103,7 @@ class ChapterHomeTests(unittest.TestCase):
         home = io.BytesIO()
         blank.save(home, format="PNG")
         flow._screen = Mock(side_effect=[data.getvalue(), picker.getvalue(), home.getvalue()]
-                            if with_icon else [picker.getvalue()] * 8)
+                            if with_icon else [picker.getvalue()] * 24)
         flow._dismiss_navigation_notice = Mock(return_value=False)
         flow._dismiss_navigation_card = Mock(return_value=False)
         flow._tap = Mock()
@@ -137,7 +138,7 @@ class ChapterHomeTests(unittest.TestCase):
         flow._hits = Mock(return_value=[hit("首页", 788, 84)])
         with self.assertRaisesRegex(RuntimeError, "首页激活状态"):
             flow._home()
-        self.assertEqual(flow._tap.call_count, 8)
+        self.assertEqual(flow._tap.call_count, 24)
 
     def test_active_home_in_task_submenu_still_returns_to_root(self):
         flow = self.make_flow(True)

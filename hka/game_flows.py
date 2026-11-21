@@ -13,6 +13,8 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
 
+from .adb import AdbTransportError
+from .retry import RetryExhausted, retry_call, retry_lag
 from .ocr import TextHit, double_stamina, find_text, integer_after, read_stamina_hud, read_text, stage_labels, stamina
 from .runner import SkipTask
 from .vision import find_image
@@ -46,6 +48,7 @@ class GameFlows:
                           round(x2 * width / 1600), round(y2 * height / 900), duration_ms)
         self.sleep(wait)
 
+    @retry_lag
     def _screen(self) -> bytes:
         self._check_cancel()
         png = self.device.screen()
@@ -58,6 +61,7 @@ class GameFlows:
             screen.convert("RGB").resize((1600, 900)).save(output, format="PNG")
             return output.getvalue()
 
+    @retry_lag
     def _hits(self, box: tuple[int, int, int, int] = (0, 0, 1600, 900),
               *, score: float = 0.75) -> list[TextHit]:
         self._check_cancel()
@@ -70,12 +74,35 @@ class GameFlows:
                                     for i, v in enumerate(box)), min_score=score)
 
     def _text(self, needle: str, box: tuple[int, int, int, int] = (0, 0, 1600, 900)) -> TextHit | None:
-        return find_text(self._hits(box), needle)
+        for attempt in range(3):
+            hit = find_text(self._hits(box), needle)
+            if hit is not None:
+                return hit
+            if attempt < 2:
+                self.sleep(1.0)
+        return None
+
+    def _observe(self, read, valid, label):
+        def check():
+            value = read()
+            if not valid(value):
+                raise RuntimeError(label)
+            return value
+        return retry_call(check, sleep=self.sleep, log=self.log, label=label)
+
+    def _poll(self, frames: int, label: str):
+        """Keep local progress while giving a delayed response three windows."""
+        for attempt in range(1, 4):
+            for frame in range(frames):
+                yield frame
+            self.log(f"{label}：第 {attempt}/3 次等待结束，尚未确认结果")
+            if attempt < 3:
+                self.sleep(1.5)
 
     def _click(self, needle: str, box: tuple[int, int, int, int] = (0, 0, 1600, 900),
                *, missing: str = "fail") -> bool:
         hit = None
-        for _ in range(4):
+        for _ in range(3):
             hit = self._text(needle, box)
             if hit is not None:
                 break
@@ -85,15 +112,22 @@ class GameFlows:
                 raise SkipTask(f"当前页面未找到“{needle}”")
             if missing == "continue":
                 return False
-            raise RuntimeError(f"当前页面未找到“{needle}”")
+            raise RetryExhausted(f"尝试 3 次仍未找到“{needle}”，停止本轮运行")
         self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2)
         return True
 
     def _dismiss_combat_result(self, hits: list[TextHit]) -> bool:
         title = find_text([h for h in hits if 680 <= h.x <= 1000 and 120 <= h.y <= 200], "战斗结算")
-        buttons = [h for h in hits if 700 <= h.x <= 1170 and 730 <= h.y <= 805]
-        confirm = find_text(buttons, "确定")
-        if not title or not find_text(buttons, "再次挑战") or not confirm:
+        buttons = [h for h in hits if 730 <= h.y <= 805]
+        confirm = next((h for h in buttons if 950 <= h.x <= 1170 and h.text.strip() == "确定"), None)
+        if not title or not confirm:
+            return False
+        replay = find_text([h for h in buttons if 700 <= h.x < 950], "再次挑战")
+        # First-clear results have no replay button. The two result stats
+        # distinguish that layout from an unrelated confirmation dialog.
+        duration = find_text([h for h in hits if 680 <= h.x <= 950 and 195 <= h.y <= 245], "挑战时间")
+        score = find_text([h for h in hits if 920 <= h.x <= 1170 and 245 <= h.y <= 295], "本次积分")
+        if not replay and not (duration and score):
             return False
         self._tap(confirm.x + confirm.width // 2, confirm.y + confirm.height // 2, 1.0)
         self.log("已确认战斗结算，返回关卡地图")
@@ -131,6 +165,7 @@ class GameFlows:
                 return True
         return False
 
+    @retry_lag
     def _home(self) -> None:
         clicked_home = False
         for _ in range(8):
@@ -171,6 +206,7 @@ class GameFlows:
             self.sleep(0.6)
         raise RuntimeError("未确认顶部首页入口或首页激活状态，已停止导航")
 
+    @retry_lag
     def _shop(self) -> None:
         self._home()
         self._tap(1240, 68, 1.5)
@@ -206,6 +242,7 @@ class GameFlows:
             return "updating"
         return None
 
+    @retry_lag
     def enter_game(self, options: dict[str, Any]) -> None:
         entered = False
         deadline = time.monotonic() + 90
@@ -248,6 +285,12 @@ class GameFlows:
                           if 480 <= hit.x <= 1100 and 240 <= hit.y <= 350)
         if "有你的祝福" in message and "开心" in message:
             return "claim"
+        # Characters use different reply text. The claim dialog can cover the
+        # birthday title and date while leaving the wish button visible.
+        if "我会好好珍藏这一切" in message and any(
+                hit.text.strip() == "生日快乐" and 1000 <= hit.x <= 1350 and 600 <= hit.y <= 730
+                for hit in hits):
+            return "claim"
         titles = "".join(hit.text.upper() for hit in hits
                          if 750 <= hit.x <= 1550 and 180 <= hit.y <= 480)
         date = any(750 <= hit.x <= 1250 and 450 <= hit.y <= 600 and
@@ -276,7 +319,7 @@ class GameFlows:
         idle = 0
         waiting = 0
         birthday_actions: set[str] = set()
-        for _ in range(40):
+        for _ in self._poll(40, "登录奖励"):
             self._check_cancel()
             hits = self._hits()
             if self._dismiss_navigation_notice(hits):
@@ -297,8 +340,8 @@ class GameFlows:
                 idle = 0
                 if birthday_stage in birthday_actions or page in claimed:
                     waiting += 1
-                    if waiting >= 8:
-                        raise RuntimeError("角色生日奖励操作后页面未变化，停止重复点击")
+                    if waiting >= 24:
+                        raise RetryExhausted("尝试 3 次后角色生日奖励操作后页面未变化，停止重复点击")
                     self.sleep(0.6)
                     continue
                 label = "生日快乐" if birthday_stage == "wish" else "领取"
@@ -307,8 +350,8 @@ class GameFlows:
                     else 650 <= hit.x <= 900 and 520 <= hit.y <= 620)]
                 if len(buttons) != 1:
                     waiting += 1
-                    if waiting >= 8:
-                        raise RuntimeError(f"已识别角色生日奖励，但未确认{label}按钮")
+                    if waiting >= 24:
+                        raise RetryExhausted(f"尝试 3 次后已识别角色生日奖励，但未确认{label}按钮")
                     self.sleep(0.6)
                     continue
                 button = buttons[0]
@@ -323,8 +366,8 @@ class GameFlows:
                 idle = 0
                 if pending or page in claimed:
                     waiting += 1
-                    if waiting >= 8:
-                        raise RuntimeError(f"{page}领取后页面未消失，停止重复点击")
+                    if waiting >= 24:
+                        raise RetryExhausted(f"尝试等待 3 次后{page}领取后页面未消失，停止重复点击")
                     self.sleep(0.6)
                     continue
                 buttons = [hit for hit in hits if hit.text.strip() == "领取" and
@@ -337,18 +380,21 @@ class GameFlows:
                     waiting = 0
                 else:
                     waiting += 1
-                    if waiting >= 8:
-                        raise RuntimeError(f"已识别{page}，但未确认领取按钮")
+                    if waiting >= 24:
+                        raise RetryExhausted(f"尝试 3 次后已识别{page}，但未确认领取按钮")
                     self.sleep(0.6)
                 continue
             idle += 1
             if idle >= 3:
                 if "wish" in birthday_actions and "claim" not in birthday_actions:
-                    raise RuntimeError("已送上生日祝福，但未确认生日奖励领取弹窗")
+                    if idle < 9:
+                        self.sleep(1.5)
+                        continue
+                    raise RetryExhausted("已送上生日祝福，尝试等待 3 次仍未确认生日奖励领取弹窗")
                 self.log(f"签到、连登与角色生日奖励处理完成，共领取 {len(claimed)} 份")
                 return {"claimed": len(claimed), "pages": claimed}
             self.sleep(0.6)
-        raise RuntimeError("每日登录奖励处理超过检查上限")
+        raise RetryExhausted("登录奖励尝试 3 次仍未确认")
 
     @staticmethod
     def _mailbox_page(hits: list[TextHit]) -> bool:
@@ -356,11 +402,17 @@ class GameFlows:
         return find_text(header, "体力领取") is not None and find_text(header, "一键领取") is not None
 
     def claim_mail(self, options: dict[str, Any]) -> dict[str, Any]:
+        header_box = (770, 140, 1570, 225)
         self._home()
-        for _ in range(8):
+        for _ in self._poll(8, "进入邮箱"):
             hits = self._hits()
             if self._mailbox_page(hits):
                 break
+            if find_text(hits, "一键删除") or find_text(hits, "体力领取"):
+                header = self._hits(header_box)
+                if self._mailbox_page(header):
+                    hits = header
+                    break
             messages = next((h for h in hits if h.text.strip() == "我的消息" and
                              650 <= h.x <= 1000 and 390 <= h.y <= 520), None)
             if messages:
@@ -375,7 +427,7 @@ class GameFlows:
             else:
                 self.sleep(0.6)
         else:
-            raise RuntimeError("未确认我的消息邮箱页面，未领取邮件")
+            raise RetryExhausted("尝试 3 次仍未确认我的消息邮箱页面，未领取邮件")
         buttons = [h for h in hits if h.text.strip() == "一键领取" and
                    1320 <= h.x <= 1560 and 125 <= h.y <= 225]
         if len(buttons) != 1:
@@ -384,7 +436,7 @@ class GameFlows:
         self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.2)
         claimed = False
         stable = 0
-        for _ in range(12):
+        for _ in self._poll(12, "确认邮件领取"):
             hits = self._hits()
             if self._dismiss_navigation_notice(hits):
                 claimed = True
@@ -393,7 +445,10 @@ class GameFlows:
             # With no eligible attachments the game keeps displaying the inbox.
             # Confirm that page repeatedly, rather than interpreting any missing
             # receipt or an unrelated popup as an empty mailbox.
-            stable = stable + 1 if self._mailbox_page(hits) else 0
+            inbox = self._mailbox_page(hits)
+            if not inbox and (find_text(hits, "一键删除") or find_text(hits, "体力领取")):
+                inbox = self._mailbox_page(self._hits(header_box))
+            stable = stable + 1 if inbox else 0
             if stable >= 4:
                 self._home()
                 if claimed:
@@ -401,7 +456,7 @@ class GameFlows:
                     return {"claimed": True}
                 raise SkipTask("邮箱没有可领取附件")
             self.sleep(0.5)
-        raise RuntimeError("邮件领取后未回到邮箱，未确认处理结果")
+        raise RetryExhausted("尝试 3 次后邮件领取后未回到邮箱，未确认处理结果")
 
     @staticmethod
     def _guild_info_page(hits: list[TextHit]) -> bool:
@@ -424,7 +479,7 @@ class GameFlows:
         resuming = self._guild_success_dialog(hits)
         if not resuming:
             self._home()
-            for _ in range(8):
+            for _ in self._poll(8, "进入社团"):
                 hits = self._hits()
                 if self._guild_info_page(hits) or self._guild_reward_dialog(hits):
                     break
@@ -446,19 +501,21 @@ class GameFlows:
                 else:
                     self.sleep(0.6)
             else:
-                raise RuntimeError("未确认我的社团信息页面，未领取社团奖励")
+                raise RetryExhausted("尝试 3 次仍未确认我的社团信息页面，未领取社团奖励")
 
         opened = resuming
         submitted = resuming
         acknowledged = False
-        for _ in range(16):
+        for _ in self._poll(16, "确认社团奖励"):
             self._check_cancel()
             if self._guild_reward_dialog(hits):
                 if not submitted:
                     buttons = [h for h in hits if h.text.strip() == "领取" and
                                580 <= h.x <= 800 and 600 <= h.y <= 720]
                     if len(buttons) != 1:
-                        raise RuntimeError("未确认社团贡献奖励弹窗的领取按钮")
+                        buttons = self._observe(lambda: [h for h in self._hits()
+                            if h.text.strip() == "领取" and 580 <= h.x <= 800 and 600 <= h.y <= 720],
+                            lambda items: len(items) == 1, "未确认社团贡献奖励弹窗的领取按钮")
                     button = buttons[0]
                     self.log("领取昨日社团贡献奖励")
                     self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.6)
@@ -468,7 +525,9 @@ class GameFlows:
                     buttons = [h for h in hits if h.text.strip() == "确定" and
                                650 <= h.x <= 900 and 500 <= h.y <= 620]
                     if len(buttons) != 1:
-                        raise RuntimeError("已收到社团奖励，但未确认成功提示的确定按钮")
+                        buttons = self._observe(lambda: [h for h in self._hits()
+                            if h.text.strip() == "确定" and 650 <= h.x <= 900 and 500 <= h.y <= 620],
+                            lambda items: len(items) == 1, "已收到社团奖励，但未确认成功提示的确定按钮")
                     button = buttons[0]
                     self._tap(button.x + button.width // 2, button.y + button.height // 2, 0.6)
                     acknowledged = True
@@ -489,7 +548,7 @@ class GameFlows:
                     opened = True
             self.sleep(0.5)
             hits = self._hits()
-        raise RuntimeError("社团奖励领取后未确认已领取状态，停止重复点击")
+        raise RetryExhausted("尝试 3 次后社团奖励领取后未确认已领取状态，停止重复点击")
 
     def refresh_resonance(self, options: dict[str, Any]) -> None:
         self._shop()
@@ -501,7 +560,9 @@ class GameFlows:
             raise SkipTask("共鸣屋免费刷新次数为零或无法识别，已跳过")
         self.log(f"共鸣屋剩余刷新次数 {remaining}")
         self._tap(1360, 190)
-        dialog = self._hits((450, 220, 1150, 670))
+        dialog = self._observe(lambda: self._hits((450, 220, 1150, 670)),
+                               lambda hits: find_text(hits, "免费刷新") and find_text(hits, "确定"),
+                               "无法核对刷新确认框")
         words = "".join(hit.text for hit in dialog)
         if not ("免费刷新" in words and "确定" in words):
             raise RuntimeError("无法核对刷新确认框，未确认")
@@ -511,7 +572,9 @@ class GameFlows:
         if hit is None:
             raise RuntimeError("未找到免费刷新确认按钮")
         self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2, 1.0)
-        after = integer_after(self._hits((1010, 145, 1410, 235)), "剩余次数")
+        after = self._observe(lambda: integer_after(self._hits((1010, 145, 1410, 235)), "剩余次数"),
+                              lambda value: value is not None and value < remaining,
+                              "刷新后剩余次数未减少，无法确认刷新成功")
         if after is None or after >= remaining:
             raise RuntimeError("刷新后剩余次数未减少，无法确认刷新成功")
 
@@ -542,7 +605,10 @@ class GameFlows:
             raise SkipTask("零时馈礼价格不是 0，或已售完")
         self.log("已确认零时馈礼价格为 0")
         self._tap(buy.x + buy.width // 2, buy.y + buy.height // 2)
-        dialog = self._hits((500, 230, 1080, 630))
+        dialog = self._observe(lambda: self._hits((500, 230, 1080, 630)),
+                               lambda hits: find_text(hits, "零时馈礼") and any(
+                                   "购买" in hit.text and hit.y > 490 for hit in hits),
+                               "未确认零时馈礼购买弹窗")
         if not find_text(dialog, "零时馈礼"):
             raise RuntimeError("购买确认框不是零时馈礼，未确认")
         candidates = [hit for hit in dialog if "购买" in hit.text and hit.y > 490]
@@ -550,10 +616,11 @@ class GameFlows:
             raise RuntimeError("未找到零时馈礼确认按钮")
         hit = min(candidates, key=lambda h: h.x)
         self._tap(hit.x + hit.width // 2, hit.y + hit.height // 2, 0.9)
-        if not self._text("购买成功", (490, 220, 1110, 650)):
-            raise RuntimeError("未看到零时馈礼购买成功提示")
+        self._observe(lambda: self._text("购买成功", (490, 220, 1110, 650)), bool,
+                      "未看到零时馈礼购买成功提示")
         self._tap(800, 555)
 
+    @retry_lag
     def _battle_picker(self) -> list[TextHit]:
         self._home()
         self._tap(955, 70, 1.5)
@@ -590,6 +657,7 @@ class GameFlows:
             self.sleep(0.7)
         raise RuntimeError("未确认战斗关卡选择页面，已停止以避免误入其他活动")
 
+    @retry_lag
     def _rift(self) -> None:
         self._battle_picker()
         self._click("活动", (35, 175, 185, 490))
@@ -623,6 +691,7 @@ class GameFlows:
                 self._swipe(1290, start, 1290, end, 650, 0.8)
         raise RuntimeError("活动列表双向查找后仍未找到多元裂缝，请确认入口是否开放")
 
+    @retry_lag
     def _open_quick_detail(self, stage: str) -> None:
         self._rift()
         if stage == "使魔的爱":
@@ -664,7 +733,11 @@ class GameFlows:
         self._click("快捷战斗", (1040, 740, 1440, 870))
         previous_count = None
         for _ in range(3):
-            dialog = self._hits((600, 300, 1010, 620))
+            dialog = self._observe(lambda: self._hits((600, 300, 1010, 620)),
+                                   lambda hits: (find_text(hits, "快速战斗") or find_text(hits, "快捷战斗"))
+                                   and len([h for h in hits if 465 <= h.y <= 515 and 670 <= h.x <= 810
+                                            and re.fullmatch(r"\d{1,2}", h.text)]) == 1,
+                                   "无法核对快捷战斗确认框或场数")
             if not find_text(dialog, "快速战斗") and not find_text(dialog, "快捷战斗"):
                 raise RuntimeError("无法核对快捷战斗确认框")
             counts = [int(hit.text) for hit in dialog if 465 <= hit.y <= 515 and
@@ -687,13 +760,14 @@ class GameFlows:
         if values[0] < expected_cost or values[0] - values[1] != expected_cost:
             raise RuntimeError("快捷战斗体力消耗与预期不符，未确认")
         self._click("确定", (600, 535, 800, 640))
-        for _ in range(12):
+        for _ in self._poll(12, "快捷战斗结算"):
             self.sleep(0.6)
             if self._text("战斗结算", (680, 125, 1340, 210)):
                 self._click("确定", (840, 700, 1150, 825))
                 return counts[0]
-        raise RuntimeError("快捷战斗后未识别到结算")
+        raise RetryExhausted("快捷战斗尝试等待 3 次仍未识别到结算")
 
+    @retry_lag
     def _quick_allowance(self, stage: str, *, allow_zero: bool = False) -> int:
         label = "今日剩余次数" if stage == "使魔的爱" else "今日免费"
         for _ in range(8):
@@ -728,6 +802,7 @@ class GameFlows:
                 any(re.search(r"已参与次数\s*[:：]?\s*3\s*/\s*3", h.text) for h in hits) and
                 find_text(hits, "今日免费") is None and find_text(hits, "快捷战斗") is None)
 
+    @retry_lag
     def _activity(self) -> None:
         self._battle_picker()
         self._click("活动", (35, 175, 185, 490))
@@ -768,6 +843,7 @@ class GameFlows:
                     self._swipe(1290, start, 1290, end, 650, 0.8)
         raise SkipTask("未找到难度 B 且仍有剩余时间的活动")
 
+    @retry_lag
     def _stage(self, name: str) -> None:
         for _ in range(6):
             hits = stage_labels(self._screen())
@@ -804,11 +880,13 @@ class GameFlows:
     def _stamina(self) -> int:
         return self._confirmed_stamina(doubled=False)
 
-    def _double_stamina(self) -> int:
-        return self._confirmed_stamina(doubled=True)
+    def _double_stamina(self, *, skip_if_hidden: bool = False) -> int:
+        return self._confirmed_stamina(doubled=True, skip_if_hidden=skip_if_hidden)
 
-    def _confirmed_stamina(self, *, doubled: bool) -> int:
+    @retry_lag
+    def _confirmed_stamina(self, *, doubled: bool, skip_if_hidden: bool = False) -> int:
         previous = None
+        ordinary_only = skip_if_hidden
         parse = double_stamina if doubled else stamina
         label = "双倍体力" if doubled else "普通体力"
         for _ in range(20):
@@ -821,9 +899,13 @@ class GameFlows:
                 self.log(f"{label}复核：{value}（连续两帧一致；OCR：{raw}）")
                 return value
             previous = value
+            ordinary_only = ordinary_only and stamina(hits) is not None
             self.sleep(0.4)
+        if ordinary_only:
+            raise SkipTask("顶部持续只显示普通体力，已跳过额外 BONUS")
         raise RuntimeError(f"无法连续确认{label}，未使用本次识别结果（顶部可能正在切换显示）")
 
+    @retry_lag
     def _exchange_snapshot(self) -> tuple[list[TextHit], bool]:
         frame = self._screen()
         hits = read_text(frame, (300 / 1600, 220 / 900, 1300 / 1600, 730 / 900))
@@ -849,7 +931,7 @@ class GameFlows:
             if not premium and not any(h.text.strip() == "取消" for h in hits):
                 return
             reason = "继续关闭后续体力兑换弹窗"
-        raise RuntimeError("体力兑换弹窗未关闭，未确认任何购买")
+        raise RetryExhausted("体力兑换弹窗尝试 3 次仍未关闭，未确认任何购买")
 
     @staticmethod
     def _safe_double_exchange(hits: list[TextHit], premium: bool,
@@ -893,7 +975,7 @@ class GameFlows:
             raise SkipTask(reason + "，已关闭兑换")
         amount, restored, confirm = second
         self._tap(confirm.x + confirm.width // 2, confirm.y + confirm.height // 2, 1.0)
-        for _ in range(8):
+        for _ in self._poll(8, "兑换结果"):
             hits, premium = self._exchange_snapshot()
             # A second purchase prompt is never confirmed, even if the first
             # prompt correctly identified the free double-stamina resource.
@@ -904,11 +986,24 @@ class GameFlows:
                 break
             self.sleep(0.6)
         else:
-            raise RuntimeError("兑换后未恢复关卡助战入口")
-        if self._stamina() != ordinary + restored or self._double_stamina() != balance - amount:
-            raise RuntimeError("兑换后的普通体力或双倍体力变化与预期不符，未开战")
+            raise RetryExhausted("兑换后尝试等待 3 次仍未恢复关卡助战入口")
+        # After a full exchange, the double-stamina HUD can be unavailable.
+        # The verified dialog and exact ordinary gain
+        # confirm that exchange without requiring a visible zero balance.
+        self._observe(lambda: self._stamina(), lambda value: value == ordinary + restored,
+                      "兑换后的普通体力或双倍体力变化与预期不符，未开战")
+        if amount < balance:
+            self._observe(lambda: self._double_stamina(), lambda value: value == balance - amount,
+                          "兑换后的普通体力或双倍体力变化与预期不符，未开战")
         self._double_exchange_details = {"double_spent": amount, "restored_stamina": restored}
         self.log(f"已核对两次并兑换 {amount} 双倍体力，补充 {restored} 普通体力")
+
+    @staticmethod
+    def _combat_hud_visible(hits: list[TextHit]) -> bool:
+        hp_label = any(hit.text.strip().upper() == "HP" and hit.x < 90 and hit.y < 55 for hit in hits)
+        hp_value = any(80 <= hit.x < 570 and hit.y < 55 and
+                       re.fullmatch(r"\d+\s*/\s*\d+", hit.text.strip()) for hit in hits)
+        return hp_label and hp_value
 
     def _combat(self, options: dict[str, Any]) -> None:
         combat = options.get("combat", {})
@@ -918,39 +1013,70 @@ class GameFlows:
         hold_ms = int(combat.get("hold_ms", 900))
         combat_mode = combat.get("mode", "move_shoot")
         self.log("战斗按键：" + "，".join(f"{slot}={weapon['mode']}" for slot, weapon in weapons.items()))
-        for cycle in range(max_cycles):
+        cycle = 0
+        reconnects = 0
+        verify_hud = False
+        once_sent: set[str] = set()
+        while cycle < max_cycles * 3:
             self._check_cancel()
-            if self.device.foreground_package() != self.device.package:
-                raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
-            hits = self._hits()
-            if find_text(hits, "失败"):
-                raise RuntimeError("体力本战斗失败")
-            if find_text(hits, "战斗结算"):
-                if not self._dismiss_combat_result(hits):
-                    raise RuntimeError("已发现战斗结算，但未完整确认结算按钮")
-                return
-            if self.device.foreground_package() != self.device.package:
-                raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
-            for slot, weapon in weapons.items():
-                mode = weapon.get("mode", "off")
-                if mode == "tap" or (mode == "once" and cycle == 0):
-                    self._tap(int(weapon["x"]), int(weapon["y"]), 0.1)
-                    self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 点按已发送（{mode}）")
-                elif mode == "hold":
-                    self._swipe(int(weapon["x"]), int(weapon["y"]), int(weapon["x"]), int(weapon["y"]), hold_ms, 0.1)
-                    self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 长按 {hold_ms} 毫秒已发送")
-            if combat_mode == "move_shoot":
-                self._swipe(210, 690, 345, 690, movement_ms, 0.5)
-            else:
-                self.sleep(movement_ms / 1000)
-        raise RuntimeError("体力本战斗超时，已停止后续刷取")
+            try:
+                if self.device.foreground_package() != self.device.package:
+                    raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
+                hits = self._hits()
+                if find_text(hits, "失败"):
+                    raise RuntimeError("体力本战斗失败")
+                if find_text(hits, "战斗结算"):
+                    if not self._dismiss_combat_result(hits):
+                        raise RuntimeError("已发现战斗结算，但未完整确认结算按钮")
+                    return
+                if verify_hud and not self._combat_hud_visible(hits):
+                    hits = self._observe(self._hits, lambda current: self._combat_hud_visible(current)
+                                         or find_text(current, "战斗结算"), "ADB 重连后未确认战斗画面")
+                    if find_text(hits, "战斗结算"):
+                        if not self._dismiss_combat_result(hits):
+                            raise RuntimeError("已发现战斗结算，但未完整确认结算按钮")
+                        return
+                if self.device.foreground_package() != self.device.package:
+                    raise RuntimeError("游戏已离开前台或前台状态不明，已停止战斗输入，请重新启动游戏")
+                verify_hud = False
+                for slot, weapon in weapons.items():
+                    mode = weapon.get("mode", "off")
+                    if mode == "tap" or (mode == "once" and cycle == 0 and slot not in once_sent):
+                        if mode == "once":
+                            once_sent.add(slot)
+                        self._tap(int(weapon["x"]), int(weapon["y"]), 0.1)
+                        self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 点按已发送（{mode}）")
+                    elif mode == "hold":
+                        self._swipe(int(weapon["x"]), int(weapon["y"]), int(weapon["x"]), int(weapon["y"]), hold_ms, 0.1)
+                        self.log(f"战斗循环 {cycle + 1}/{max_cycles}：{slot} 长按 {hold_ms} 毫秒已发送")
+                if combat_mode == "move_shoot":
+                    self._swipe(210, 690, 345, 690, movement_ms, 0.5)
+                else:
+                    self.sleep(movement_ms / 1000)
+            except AdbTransportError as exc:
+                if reconnects >= 2:
+                    raise RetryExhausted("战斗中 ADB 连接尝试 3 次仍中断，停止本轮运行") from exc
+                reconnects += 1
+                serial = self.device.serial
+                self.log(f"战斗中 ADB 连接中断，尝试重新连接（{reconnects}/2）：{exc}")
+                retry_call(self.device.connect, sleep=self.sleep, log=self.log, label="战斗重连")
+                if self.device.serial != serial:
+                    raise RuntimeError("ADB 重连后设备地址已变化，已停止战斗输入")
+                verify_hud = True
+                continue
+            cycle += 1
+            if cycle % max_cycles == 0:
+                self.log(f"战斗结算等待：第 {cycle // max_cycles}/3 次超时，继续核对当前战斗")
+        raise RetryExhausted("体力本战斗超时，尝试等待 3 次仍未结算，停止本轮运行")
 
-    def _run_stage(self, name: str, options: dict[str, Any], *, double_extra: bool = False) -> None:
+    def _run_stage(self, name: str, options: dict[str, Any], *, double_extra: bool = False,
+                   double_already_exchanged: bool = False) -> None:
         self._stage(name)
         if not self._text(name, (735, 145, 1040, 220)):
-            raise RuntimeError(f"未进入 {name} 关卡详情")
+            raise RetryExhausted(f"尝试 3 次仍未进入 {name} 关卡详情")
         if name != "BONUS":
-            detail_cost = integer_after(self._hits((760, 635, 1050, 730)), "消耗体力")
+            detail_cost = self._observe(lambda: integer_after(self._hits((760, 635, 1050, 730)), "消耗体力"),
+                                        lambda value: value is not None and value >= 0, f"无法识别 {name} 消耗体力")
             if detail_cost is None or detail_cost < 0:
                 raise RuntimeError(f"无法识别 {name} 消耗体力")
             if self._stamina() < detail_cost:
@@ -958,11 +1084,13 @@ class GameFlows:
         if name == "BONUS":
             # This threshold is intentionally stricter than the displayed 50 cost.
             if double_extra:
-                if self._double_stamina() < 50:
+                if not double_already_exchanged and self._double_stamina() < 50:
                     raise SkipTask("双倍体力不足 50，已跳过额外 BONUS")
             elif self._stamina() < int(options.get("min_stamina", 100)):
                 raise SkipTask("体力不足 100，已停止 BONUS 刷取")
-            detail = self._hits((760, 635, 1415, 730))
+            detail = self._observe(lambda: self._hits((760, 635, 1415, 730)),
+                                   lambda hits: integer_after(hits, "消耗体力") in {50, 100},
+                                   "BONUS 消耗体力与预期不符")
             cost = integer_after(detail, "消耗体力")
             if cost not in {50, 100}:
                 raise RuntimeError("BONUS 消耗体力与预期不符")
@@ -970,10 +1098,11 @@ class GameFlows:
             expected_cost = 100 if use_ticket else 50
             if cost != expected_cost:
                 self._tap(1375, 680)
-                updated_cost = integer_after(self._hits((760, 635, 1415, 730)), "消耗体力")
+                updated_cost = self._observe(lambda: integer_after(self._hits((760, 635, 1415, 730)), "消耗体力"),
+                                             lambda value: value == expected_cost, "双倍券开关状态无法确认，未进入战斗")
                 if updated_cost != expected_cost:
                     raise RuntimeError("双倍券开关状态无法确认，未进入战斗")
-            if double_extra and self._stamina() < 50:
+            if double_extra and not double_already_exchanged and self._stamina() < 50:
                 self._exchange_double_stamina()
             confirmed_stamina = self._stamina()
             if confirmed_stamina < (50 if double_extra else int(options.get("min_stamina", 100))):
@@ -988,7 +1117,7 @@ class GameFlows:
 
     def bonus_double_stamina(self, options: dict[str, Any]) -> dict[str, Any]:
         self._home()
-        balance = self._double_stamina()
+        balance = self._double_stamina(skip_if_hidden=True)
         if balance < 50:
             raise SkipTask(f"当前双倍体力 {balance} 不足 50，已跳过额外 BONUS")
         self._double_exchange_details = {}
@@ -1033,7 +1162,7 @@ class GameFlows:
     def _first_clear_stage(self, name: str, options: dict[str, Any]) -> None:
         self._stage(name)
         score = None
-        for _ in range(5):
+        for _ in self._poll(5, "首通得分识别"):
             detail = self._hits((745, 145, 1030, 265))
             if find_text(detail, name):
                 score = integer_after(detail, "最高得分")
@@ -1041,12 +1170,13 @@ class GameFlows:
                     break
             self.sleep(0.5)
         if score is None:
-            raise RuntimeError(f"无法识别 {name} 最高得分，未判断是否需首通")
+            raise RetryExhausted(f"尝试 3 次仍无法识别 {name} 最高得分，未判断是否需首通")
         self._tap(70, 168, 1.2)
         self.log(f"{name} 最高得分 {score}，{'开始首通' if score == 0 else '已通关'}")
         if score == 0:
             self._run_stage(name, options)
 
+    @retry_lag
     def _optional_stage_visible(self, name: str) -> bool:
         # New stage icons and their orange captions fade in separately after
         # settlement. Let the unlock animation finish before testing absence.
@@ -1070,10 +1200,11 @@ class GameFlows:
             self.sleep(0.8)
         raise RuntimeError(f"未确认第二页地图，无法判断是否出现 {name}")
 
+    @retry_lag
     def _tasks(self) -> None:
         self._home()
         self._tap(65, 205, 1.5)
-        if not self._text("使魔探险", (0, 490, 175, 640)):
+        if not self._text("使魔探险", (0, 180, 180, 700)):
             raise RuntimeError("未进入首页任务页面")
 
     def _scroll_expeditions(self) -> bool:
@@ -1086,7 +1217,7 @@ class GameFlows:
 
     def expeditions(self, options: dict[str, Any]) -> None:
         self._tasks()
-        self._click("使魔探险", (0, 480, 180, 640))
+        self._click("使魔探险", (0, 180, 180, 700))
         claimed = 0
         stationary = 0
         for _ in range(60):
@@ -1095,7 +1226,7 @@ class GameFlows:
             if reward:
                 accepted = integer_after(self._hits(), "已接收的探险数")
                 self._tap(reward.x + reward.width // 2, reward.y + reward.height // 2, 0.6)
-                for _ in range(5):
+                for _ in self._poll(5, "探险领奖结果"):
                     after = self._hits()
                     if find_text(after, "获得奖励"):
                         self._tap(800, 740)
@@ -1105,7 +1236,7 @@ class GameFlows:
                         break
                     self.sleep(0.4)
                 else:
-                    raise RuntimeError("未确认使魔探险奖励领取成功")
+                    raise RetryExhausted("尝试等待 3 次仍未确认使魔探险奖励领取成功")
                 claimed += 1
                 stationary = 0
                 continue
@@ -1126,7 +1257,8 @@ class GameFlows:
             if select:
                 self._tap(select.x + select.width // 2, select.y + select.height // 2)
                 self._click("一键派遣", (860, 730, 1200, 865))
-                success = self._text("成功率", (1200, 135, 1530, 285))
+                success = self._observe(lambda: self._text("成功率", (1200, 135, 1530, 285)), bool,
+                                        "一键派遣后未显示成功率")
                 if success is None:
                     raise RuntimeError("一键派遣后未显示成功率")
                 self._click("出发", (1180, 730, 1510, 865))
@@ -1142,15 +1274,17 @@ class GameFlows:
 
     def claim_presence(self, options: dict[str, Any]) -> None:
         self._tasks()
-        self._click("存在感", (0, 335, 180, 445))
+        self._click("存在感", (0, 180, 180, 700))
         self._claim_task_rewards("存在感")
 
     def claim_weekly(self, options: dict[str, Any]) -> None:
         self._tasks()
-        self._click("每周任务", (0, 430, 180, 525))
+        self._click("每周任务", (0, 180, 180, 700))
         # Tight crops cut through the decorative logo and can merge its two
         # lines with the adjacent stars. OCR the page, then restrict positions.
-        header = [h for h in self._hits() if 280 <= h.x <= 570 and 180 <= h.y <= 320]
+        header = self._observe(lambda: [h for h in self._hits() if 280 <= h.x <= 570 and 180 <= h.y <= 320],
+                               lambda hits: find_text(hits, "每周") and find_text(hits, "存在感"),
+                               "未确认每周任务奖励页面，未领取")
         if not (find_text(header, "每周") and find_text(header, "存在感")):
             raise RuntimeError("未确认每周任务奖励页面，未领取")
         self._claim_task_rewards("每周")
@@ -1158,7 +1292,7 @@ class GameFlows:
     def _claim_task_rewards(self, label: str) -> None:
         self._click("一键领取", (1150, 230, 1400, 320), missing="skip")
         claimed = False
-        for _ in range(10):
+        for _ in self._poll(10, "任务奖励领取结果"):
             if self._text("已领取以下奖励"):
                 claimed = True
                 # The reward panel grows with its contents. Tap outside it and
@@ -1170,7 +1304,7 @@ class GameFlows:
                 return
             self.sleep(0.5)
         if claimed:
-            raise RuntimeError(f"{label}奖励弹窗未关闭")
+            raise RetryExhausted(f"{label}奖励弹窗尝试 3 次仍未关闭")
         raise SkipTask(f"{label}没有可领取奖励")
 
 

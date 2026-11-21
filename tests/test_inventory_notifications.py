@@ -22,6 +22,8 @@ from hka.web import config_snapshot, save_config_snapshot
 class InventoryTests(unittest.TestCase):
     def test_full_inventory_outside_requested_crop_is_detected(self):
         flow = GameFlows.__new__(GameFlows)
+        flow.sleep = Mock()
+        flow.log = Mock()
         flow._check_cancel = Mock()
         flow._screen = Mock(return_value=b'frame')
         warning = TextHit('装备仓库已满', 1, 668, 285, 300, 40)

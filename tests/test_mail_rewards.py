@@ -50,8 +50,16 @@ class MailRewardsTests(unittest.TestCase):
         self.flow.device.tap.assert_called_once_with(1447, 168)
         self.assertEqual(self.flow._home.call_count, 2)
 
+    def test_mail_header_crop_recovers_misread_claim_label(self):
+        misread = [hit('体力领取', 1082, 152), hit('键领取', 1397, 153), hit('一键删除', 851, 153)]
+        frames = [misread, inbox(), [hit('已领取以下奖励', 650, 80)]] + [misread, inbox()] * 4
+        with patch.object(self.flow, '_hits', side_effect=frames):
+            self.assertEqual(self.flow.claim_mail({}), {'claimed': True})
+        self.assertEqual([tap.args for tap in self.flow.device.tap.call_args_list],
+                         [(1447, 168), (1450, 740)])
+
     def test_unrecognized_page_is_not_treated_as_empty_inbox(self):
-        with patch.object(self.flow, '_hits', side_effect=[inbox()] + [[hit('网络异常', 700, 400)]] * 12):
+        with patch.object(self.flow, '_hits', side_effect=[inbox()] + [[hit('网络异常', 700, 400)]] * 36):
             with self.assertRaisesRegex(RuntimeError, '未确认处理结果'):
                 self.flow.claim_mail({})
         self.flow.device.tap.assert_called_once()
