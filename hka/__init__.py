@@ -1,3 +1,3 @@
 """Honkai Academy 2 task automation."""
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"

@@ -7,7 +7,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from .adb import AdbDevice
+from .adb import AdbDevice, AdbError, EmulatorStarting
 from .cancellation import Cancelled
 from .config import execution_day, schedule_matches
 from .notify import send_notifications
@@ -107,12 +107,19 @@ class TaskRunner:
             return result
         self.run_dir.mkdir(parents=True, exist_ok=True)
         started = False
+        waiting_for_device = False
+
         def connect_device():
-            nonlocal started
+            nonlocal started, waiting_for_device
+            if waiting_for_device:
+                self.log("等待模拟器 ADB 就绪，本次最多 60 秒")
+                self.device.wait_until_ready(timeout=60)
+                return
             try:
                 self.device.connect()
-            except RuntimeError:
-                if not started and self.device.emulator_path:
+            except AdbError as exc:
+                waiting_for_device = True
+                if self.device.emulator_path and not isinstance(exc, EmulatorStarting):
                     self.log("ADB 尚未连接，正在启动模拟器")
                     self.device.start_emulator()
                     started = True

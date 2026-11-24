@@ -19,6 +19,10 @@ class AdbTransportError(AdbError):
     pass
 
 
+class EmulatorStarting(AdbError):
+    """The configured emulator process is running while Android boots."""
+
+
 def _background_options() -> dict:
     # pythonw otherwise gives each console helper its own visible window.
     return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
@@ -180,8 +184,10 @@ class AdbDevice:
             return
         if not isinstance(info, dict) or str(info.get("index")) != index:
             return
-        if info.get("is_process_started") is False or info.get("is_android_started") is False:
-            raise AdbError(f"MuMu 实例 {index} 尚未启动完成，旧 ADB 地址可能仍显示在线，请启动该实例后重试")
+        if info.get("is_process_started") is False:
+            raise AdbError(f"MuMu 实例 {index} 尚未启动，旧 ADB 地址可能仍显示在线")
+        if info.get("is_android_started") is False:
+            raise EmulatorStarting(f"MuMu 实例 {index} 尚未启动完成，正在等待 Android 就绪")
         port = info.get("adb_port")
         host = info.get("adb_host_ip", "127.0.0.1")
         if type(port) is int and 0 < port < 65536 and host in {"127.0.0.1", "localhost"}:

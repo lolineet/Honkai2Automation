@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from hka.adb import AdbDevice, AdbError
+from hka.adb import AdbDevice, AdbError, EmulatorStarting
 from hka.cancellation import Cancelled
 
 
@@ -110,6 +110,15 @@ class MuMuAddressTests(unittest.TestCase):
                 'index': '1', 'is_process_started': False, 'is_android_started': False})), \
              patch.object(self.device, '_run', return_value='device') as run:
             with self.assertRaisesRegex(AdbError, '实例 1 尚未启动'):
+                self.device.connect()
+        run.assert_not_called()
+
+    def test_booting_instance_waits_instead_of_using_stale_adb(self):
+        booting = self.result({'index': '1', 'is_process_started': True,
+                               'is_android_started': False, 'adb_port': 16416})
+        with patch.object(self.device, '_execute', return_value=booting), \
+             patch.object(self.device, '_run') as run:
+            with self.assertRaises(EmulatorStarting):
                 self.device.connect()
         run.assert_not_called()
 

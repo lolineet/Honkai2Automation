@@ -24,7 +24,7 @@
 >
 > 助手打开后保持待机。本轮结束后回到待机；默认不设置开机启动，也不自动开始下一轮。关闭 BAT 窗口即停止服务和当前任务，ADB 子进程不额外弹出控制台窗口。
 
-最新版本：**[v0.1.8](https://github.com/lolineet/Honkai2Automation/releases/tag/v0.1.8)** · [本版更新](docs/releases/v0.1.8.md) · [从初版至今的更新回顾](docs/update-history.md)
+最新版本：**[v0.1.9](https://github.com/lolineet/Honkai2Automation/releases/tag/v0.1.9)** · [本版更新](docs/releases/v0.1.9.md) · [从初版至今的更新回顾](docs/update-history.md)
 
 ## ✨ 能做什么
 

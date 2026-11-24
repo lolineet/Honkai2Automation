@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from hka.adb import AdbError, EmulatorStarting
 from hka.cancellation import Cancelled
 from hka.defaults import DEFAULT_CONFIG
 from hka.game_flows import GameFlows
@@ -69,19 +70,23 @@ class RetryTests(unittest.TestCase):
         flow._tap.assert_called_once()
 
     def test_connect_retry_starts_configured_emulator_once(self):
-        with tempfile.TemporaryDirectory() as temp:
-            config = copy.deepcopy(DEFAULT_CONFIG)
-            config['tasks'] = [dict(id='ready', name='ready', enabled=True,
-                                    schedule={'type': 'daily'}, steps=[])]
-            device = Mock(emulator_path='emulator.exe')
-            device.connect.side_effect = [RuntimeError('offline'), None]
-            device.size.return_value = (1600, 900)
-            runner = TaskRunner(config, Path(temp) / 'config.json', device=device,
-                                sleep=Mock(), log=Mock())
-            with patch('hka.runner.send_notifications', return_value=[]):
-                self.assertEqual(runner.run()['status'], 'success')
-            self.assertEqual(device.connect.call_count, 2)
-            device.start_emulator.assert_called_once()
+        for initial_error in (AdbError('offline'), EmulatorStarting('booting')):
+            with self.subTest(error=initial_error), tempfile.TemporaryDirectory() as temp:
+                config = copy.deepcopy(DEFAULT_CONFIG)
+                config['tasks'] = [dict(id='ready', name='ready', enabled=True,
+                                        schedule={'type': 'daily'}, steps=[])]
+                device = Mock(emulator_path='emulator.exe')
+                device.connect.side_effect = initial_error
+                device.wait_until_ready.side_effect = [AdbError('first wait expired'), None]
+                device.size.return_value = (1600, 900)
+                runner = TaskRunner(config, Path(temp) / 'config.json', device=device,
+                                    sleep=Mock(), log=Mock())
+                with patch('hka.runner.send_notifications', return_value=[]):
+                    self.assertEqual(runner.run()['status'], 'success')
+                device.connect.assert_called_once()
+                self.assertEqual([call.kwargs for call in device.wait_until_ready.call_args_list],
+                                 [{'timeout': 60}, {'timeout': 60}])
+                self.assertEqual(device.start_emulator.call_count, int(type(initial_error) is AdbError))
 
     def test_result_polling_preserves_progress_and_has_three_windows(self):
         flow = GameFlows.__new__(GameFlows)

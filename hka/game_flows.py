@@ -796,10 +796,13 @@ class GameFlows:
 
     @staticmethod
     def _axis_exhausted(hits: list[TextHit]) -> bool:
+        participation = find_text(hits, "已参与次数")
+        counts = re.fullmatch(r"已参与次数\s*[:：]?\s*(\d+)\s*/\s*(\d+)",
+                              participation.text.strip()) if participation else None
         return (find_text(hits, "进度") is not None and
                 find_text(hits, "选择助战好友") is not None and
                 integer_after(hits, "消耗体力") == 35 and
-                any(re.search(r"已参与次数\s*[:：]?\s*3\s*/\s*3", h.text) for h in hits) and
+                counts is not None and int(counts[1]) == int(counts[2]) > 0 and
                 find_text(hits, "今日免费") is None and find_text(hits, "快捷战斗") is None)
 
     @retry_lag

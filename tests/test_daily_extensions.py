@@ -302,12 +302,22 @@ class DailyExtensions(unittest.TestCase):
     def test_axis_exhausted_page_with_paid_replay_is_never_entered(self):
         flow = GameFlows.__new__(GameFlows)
         flow.sleep = Mock()
-        flow._hits = Mock(return_value=[hit('进度: 阶段二'), hit('已参与次数:3/3'),
-            hit('消耗体力35'), hit('选择助战好友')])
+        flow._hits = Mock()
         flow.log = Mock()
-        self.assertEqual(flow._quick_allowance('虚轴之庭', allow_zero=True), 0)
-        with self.assertRaises(SkipTask):
-            flow._quick_allowance('虚轴之庭')
+        flow._open_quick_detail = Mock()
+        flow._execute_quick = Mock()
+        for counts in ('2/2', '3 / 3'):
+            with self.subTest(counts=counts):
+                flow._hits.return_value = [hit('进度: 最终阶段'), hit(f'已参与次数: {counts}'),
+                                           hit('消耗体力35'), hit('选择助战好友')]
+                self.assertEqual(flow._quick_allowance('虚轴之庭', allow_zero=True), 0)
+                with self.assertRaises(SkipTask):
+                    flow.quick_battle({'stage': '虚轴之庭'})
+                flow._execute_quick.assert_not_called()
+        for counts in ('1/2', '0/0'):
+            with self.subTest(counts=counts):
+                flow._hits.return_value[1] = hit(f'已参与次数: {counts}')
+                self.assertFalse(flow._axis_exhausted(flow._hits.return_value))
 
     def test_axis_reduces_the_dialog_count_to_remaining_free_attempts(self):
         flow = GameFlows.__new__(GameFlows)
